@@ -9,46 +9,43 @@ from telegram import Update, ParseMode
 from telegram.ext import Updater, CommandHandler, CallbackContext
 
 # ===== CONFIGURACIÓN =====
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
 )
 
 TOKEN = os.environ.get("TOKEN")
-USER_ID = int(os.environ.get("USER_ID", "0"))  # Tu ID numérico de Telegram
+USER_ID = 278754715  # Tu ID numérico de Telegram
+WHALES_FILE = "whales.json"
+CONFIG_FILE = "config.json"
 
 if not TOKEN:
     logging.error("❌ TOKEN no definido en variables de entorno")
     exit()
 
-if USER_ID == 0:
-    logging.error("❌ USER_ID no definido en variables de entorno")
-    exit()
+# ===== LÍMITE DE ALERTA =====
+USD_THRESHOLD = 1000  # Límite por defecto en USD
 
-WHALES_FILE = "whales.json"
-
-# Asegurarse de que exista whales.json
-if not os.path.exists(WHALES_FILE):
-    with open(WHALES_FILE, "w") as f:
-        json.dump([], f)
+# Cargar límite desde archivo si existe
+try:
+    with open(CONFIG_FILE, "r") as f:
+        data = json.load(f)
+        USD_THRESHOLD = data.get("USD_THRESHOLD", USD_THRESHOLD)
+except FileNotFoundError:
+    pass
 
 # ===== FUNCIONES BASE =====
 def load_whales():
     try:
         with open(WHALES_FILE, "r") as f:
             return json.load(f)
-    except Exception as e:
-        logging.error(f"Error cargando whales.json: {e}")
+    except:
         return []
 
 def save_whales(data):
-    try:
-        with open(WHALES_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as e:
-        logging.error(f"Error guardando whales.json: {e}")
+    with open(WHALES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 def send_alert(message: str):
     if USER_ID:
@@ -62,7 +59,8 @@ def start(update: Update, context: CallbackContext):
         "/add <wallet> <nombre>\n"
         "/del <wallet>\n"
         "/list\n"
-        "Monitoreando transacciones grandes..."
+        "/setlimit <USD>\n"
+        f"Monitoreando transacciones grandes > ${USD_THRESHOLD}..."
     )
 
 def add_whale(update: Update, context: CallbackContext):
@@ -93,28 +91,54 @@ def list_whales(update: Update, context: CallbackContext):
         text = "\n".join([f"• {w['name']}: `{w['address']}`" for w in whales])
         update.message.reply_text(f"🐋 *Ballenas monitoreadas:*\n{text}", parse_mode=ParseMode.MARKDOWN)
 
+# ===== COMANDO PARA CAMBIAR LÍMITE =====
+def set_limit(update: Update, context: CallbackContext):
+    global USD_THRESHOLD
+    if not context.args:
+        update.message.reply_text(f"Uso: /setlimit <monto_en_USD>\nLímite actual: ${USD_THRESHOLD}")
+        return
+    try:
+        USD_THRESHOLD = float(context.args[0])
+        update.message.reply_text(f"✅ Límite actualizado a ${USD_THRESHOLD}")
+        # Guardar en archivo para persistencia
+        with open(CONFIG_FILE, "w") as f:
+            json.dump({"USD_THRESHOLD": USD_THRESHOLD}, f)
+    except ValueError:
+        update.message.reply_text("❌ Valor inválido. Escribe un número.")
+
 # ===== MONITOREO XRP =====
 def on_message(ws, msg):
     data = json.loads(msg)
     if "transaction" in data and data["transaction"]["TransactionType"] == "Payment":
-        amount = int(data["transaction"].get("Amount", 0))
+        amount_drops = int(data["transaction"].get("Amount", 0))
+        amount_xrp = amount_drops / 1_000_000
         sender = data["transaction"]["Account"]
         receiver = data["transaction"]["Destination"]
         tx_hash = data["transaction"]["hash"]
 
-        if amount > 5_000_000_000:  # 5000 XRP en drops
-            whales = load_whales()
-            for w in whales:
-                if sender == w["address"] or receiver == w["address"]:
-                    direction = "💹 Largo" if receiver == w["address"] else "📉 Corto"
-                    message = (
-                        f"🐋 *Movimiento detectado!*\n"
-                        f"💸 {amount/1_000_000:.2f} XRP\n"
-                        f"🏦 {w['name']}\n"
-                        f"🔗 [Ver en XRPSCAN](https://xrpscan.com/tx/{tx_hash})\n"
-                        f"{direction}"
-                    )
-                    send_alert(message)
+        # Obtener precio XRP/USD
+        try:
+            r = requests.get("https://api.coincap.io/v2/assets/ripple")
+            price = float(r.json()["data"]["priceUsd"])
+        except:
+            price = 0
+
+        usd_value = amount_xrp * price
+        if usd_value < USD_THRESHOLD:
+            return  # Ignorar si no supera el límite
+
+        whales = load_whales()
+        for w in whales:
+            if sender == w["address"] or receiver == w["address"]:
+                direction = "💹 Largo" if receiver == w["address"] else "📉 Corto"
+                message = (
+                    f"🐋 *Movimiento detectado!*\n"
+                    f"💸 {amount_xrp:.2f} XRP (~${usd_value:,.2f})\n"
+                    f"🏦 {w['name']}\n"
+                    f"🔗 [Ver en XRPSCAN](https://xrpscan.com/tx/{tx_hash})\n"
+                    f"{direction}"
+                )
+                send_alert(message)
 
 def start_websocket():
     ws = websocket.WebSocketApp("wss://s1.ripple.com", on_message=on_message)
@@ -127,6 +151,7 @@ dp.add_handler(CommandHandler("start", start))
 dp.add_handler(CommandHandler("add", add_whale))
 dp.add_handler(CommandHandler("del", del_whale))
 dp.add_handler(CommandHandler("list", list_whales))
+dp.add_handler(CommandHandler("setlimit", set_limit))
 
 # Inicia WebSocket en segundo plano
 threading.Thread(target=start_websocket, daemon=True).start()
