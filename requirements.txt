@@ -11,9 +11,10 @@ certifi==2025.10.5
 urllib3==2.5.0
 charset_normalizer==3.4.4
 idna==3.11
-flask==2.4.3
+flask==3.1.2
 
    
+
 
 
 
