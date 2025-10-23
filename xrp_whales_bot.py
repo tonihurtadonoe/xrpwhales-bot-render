@@ -1,16 +1,17 @@
-import requests
+import os
 import time
-from telegram import Bot, ParseMode
+import requests
+from telegram import Bot
+from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from dotenv import load_dotenv
-import os
 
-# ---------------- Cargar variables ---------------- #
+# ---------------- Cargar variables de entorno ---------------- #
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 USER_ID = os.getenv("USER_ID")
-WHALE_ALERT_API_KEY = os.getenv("WHALE_ALERT_API_KEY")  # opcional si la quieres en .env
+WHALE_ALERT_API_KEY = os.getenv("WHALE_ALERT_API_KEY")  # opcional
 XRPSCAN_API_KEY = os.getenv("XRPSCAN_API_KEY")  # opcional
 
 MIN_USD_VALUE = 5_000_000  # Filtrar transacciones >= 5M USD
@@ -26,7 +27,7 @@ seen_tx_hashes = set()
 # ---------------- Funciones ---------------- #
 def fetch_whale_alert_transactions():
     """
-    Obtiene transacciones de Whale Alert para XRP >= MIN_USD_VALUE
+    Obtiene transacciones grandes de Whale Alert para XRP >= MIN_USD_VALUE
     """
     url = "https://api.whale-alert.io/v1/transactions"
     params = {
@@ -44,7 +45,14 @@ def fetch_whale_alert_transactions():
             if tx_hash in seen_tx_hashes:
                 continue
             seen_tx_hashes.add(tx_hash)
-            tx_type = "📈 Compra (ingreso a exchange)" if tx["to"]["owner_type"] == "exchange" else "📉 Salida (venta)"
+
+            # Determinar tipo de transacción
+            tx_type = (
+                "📈 Ingreso a exchange (posible venta)"
+                if tx["to"]["owner_type"] == "exchange"
+                else "📤 Salida de exchange (posible compra)"
+            )
+
             amount_usd = tx["amount_usd"]
             transactions.append({
                 "type": tx_type,
@@ -55,7 +63,7 @@ def fetch_whale_alert_transactions():
             })
         return transactions
     except Exception as e:
-        print(f"Error al obtener transacciones de Whale Alert: {e}")
+        print(f"❌ Error al obtener transacciones: {e}")
         return []
 
 
@@ -63,19 +71,23 @@ async def send_telegram_alert(tx):
     """
     Envía la alerta a Telegram
     """
-    message = (
-        f"🐋 *{tx['type']} detectada!*\n"
-        f"Monto: ${tx['amount_usd']:,}\n"
-        f"De: {tx['from']}\n"
-        f"A: {tx['to']}\n"
-        f"[Ver en XRPScan](https://xrpscan.com/tx/{tx['hash']})"
-    )
-    await bot.send_message(chat_id=USER_ID, text=message, parse_mode=ParseMode.MARKDOWN)
+    try:
+        message = (
+            f"🐋 *{tx['type']} detectada!*\n"
+            f"Monto: ${tx['amount_usd']:,}\n"
+            f"De: {tx['from']}\n"
+            f"A: {tx['to']}\n"
+            f"[🔗 Ver en XRPScan](https://xrpscan.com/tx/{tx['hash']})"
+        )
+        await bot.send_message(chat_id=USER_ID, text=message, parse_mode=ParseMode.MARKDOWN)
+        print(f"✅ Alerta enviada: {tx['hash']}")
+    except Exception as e:
+        print(f"⚠️ Error al enviar mensaje Telegram: {e}")
 
 
 async def check_whales(context: ContextTypes.DEFAULT_TYPE):
     """
-    Función periódica para chequear transacciones grandes
+    Función periódica para revisar transacciones grandes
     """
     transactions = fetch_whale_alert_transactions()
     for tx in transactions:
@@ -92,14 +104,16 @@ async def start(update, context):
 
 # ---------------- Inicialización ---------------- #
 if __name__ == "__main__":
+    print("🚀 Iniciando bot XRP Whales...")
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Comando /start
     app.add_handler(CommandHandler("start", start))
 
-    # Agregar tarea periódica
+    # Tarea periódica
     job_queue = app.job_queue
-    job_queue.run_repeating(check_whales, interval=POLL_INTERVAL, first=0)
+    job_queue.run_repeating(check_whales, interval=POLL_INTERVAL, first=5)
 
-    print("🚀 Bot XRP Whales iniciado...")
+    print("🤖 Bot ejecutándose. Esperando transacciones...")
     app.run_polling()
