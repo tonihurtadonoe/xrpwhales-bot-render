@@ -9,31 +9,46 @@ from telegram import Update, ParseMode
 from telegram.ext import Updater, CommandHandler, CallbackContext
 
 # ===== CONFIGURACIÓN =====
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
 )
 
 TOKEN = os.environ.get("TOKEN")
-USER_ID = 278754715  # Tu ID numérico de Telegram
-WHALES_FILE = "whales.json"
+USER_ID = int(os.environ.get("USER_ID", "0"))  # Tu ID numérico de Telegram
 
 if not TOKEN:
     logging.error("❌ TOKEN no definido en variables de entorno")
     exit()
+
+if USER_ID == 0:
+    logging.error("❌ USER_ID no definido en variables de entorno")
+    exit()
+
+WHALES_FILE = "whales.json"
+
+# Asegurarse de que exista whales.json
+if not os.path.exists(WHALES_FILE):
+    with open(WHALES_FILE, "w") as f:
+        json.dump([], f)
 
 # ===== FUNCIONES BASE =====
 def load_whales():
     try:
         with open(WHALES_FILE, "r") as f:
             return json.load(f)
-    except:
+    except Exception as e:
+        logging.error(f"Error cargando whales.json: {e}")
         return []
 
 def save_whales(data):
-    with open(WHALES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    try:
+        with open(WHALES_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logging.error(f"Error guardando whales.json: {e}")
 
 def send_alert(message: str):
     if USER_ID:
@@ -91,7 +106,6 @@ def on_message(ws, msg):
             whales = load_whales()
             for w in whales:
                 if sender == w["address"] or receiver == w["address"]:
-                    # Modo pro: detecta si es compra (largo) o venta (corto)
                     direction = "💹 Largo" if receiver == w["address"] else "📉 Corto"
                     message = (
                         f"🐋 *Movimiento detectado!*\n"
