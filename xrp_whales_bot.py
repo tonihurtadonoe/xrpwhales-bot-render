@@ -43,4 +43,5 @@ def start(update: Update, context: CallbackContext):
     global CHAT_ID
     CHAT_ID = update.message.chat_id
     update.message.reply_text(
-        "👋 Bot activo. Usos
+        "👋 Bot activo. Usos)
+
