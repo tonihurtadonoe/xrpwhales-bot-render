@@ -25,7 +25,7 @@ if not TOKEN:
     exit()
 
 # ===== LÍMITE DE ALERTA =====
-USD_THRESHOLD = 1000  # Límite por defecto en USD
+USD_THRESHOLD = 5_000_000  # Límite por defecto en USD
 
 # Cargar límite desde archivo si existe
 try:
@@ -60,7 +60,7 @@ def start(update: Update, context: CallbackContext):
         "/del <wallet>\n"
         "/list\n"
         "/setlimit <USD>\n"
-        f"Monitoreando transacciones grandes > ${USD_THRESHOLD}..."
+        f"Monitoreando transacciones grandes > ${USD_THRESHOLD:,.0f}..."
     )
 
 def add_whale(update: Update, context: CallbackContext):
@@ -95,11 +95,11 @@ def list_whales(update: Update, context: CallbackContext):
 def set_limit(update: Update, context: CallbackContext):
     global USD_THRESHOLD
     if not context.args:
-        update.message.reply_text(f"Uso: /setlimit <monto_en_USD>\nLímite actual: ${USD_THRESHOLD}")
+        update.message.reply_text(f"Uso: /setlimit <monto_en_USD>\nLímite actual: ${USD_THRESHOLD:,.0f}")
         return
     try:
         USD_THRESHOLD = float(context.args[0])
-        update.message.reply_text(f"✅ Límite actualizado a ${USD_THRESHOLD}")
+        update.message.reply_text(f"✅ Límite actualizado a ${USD_THRESHOLD:,.0f}")
         # Guardar en archivo para persistencia
         with open(CONFIG_FILE, "w") as f:
             json.dump({"USD_THRESHOLD": USD_THRESHOLD}, f)
@@ -133,7 +133,7 @@ def on_message(ws, msg):
                 direction = "💹 Largo" if receiver == w["address"] else "📉 Corto"
                 message = (
                     f"🐋 *Movimiento detectado!*\n"
-                    f"💸 {amount_xrp:.2f} XRP (~${usd_value:,.2f})\n"
+                    f"💸 {amount_xrp:,.2f} XRP (~${usd_value:,.2f})\n"
                     f"🏦 {w['name']}\n"
                     f"🔗 [Ver en XRPSCAN](https://xrpscan.com/tx/{tx_hash})\n"
                     f"{direction}"
