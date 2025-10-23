@@ -1,86 +1,148 @@
-import os
 import json
-from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, ContextTypes
+import os
+import asyncio
+from telegram import BotCommand
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from dotenv import load_dotenv
+import httpx
 
-# Cargar variables de entorno
+# --- Config ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+WH_API_KEY = os.getenv("WH_API_KEY")  # Whale Alert API key
+CHECK_INTERVAL = 60  # segundos
+DATA_FILE = "whales.json"
 
-# Archivo para guardar las ballenas
-BALLENAS_FILE = "ballenas.json"
+# --- JSON Data ---
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump({"ballenas": [], "min_usd": 5000000, "last_tx": {}}, f)
 
-# Cargar ballenas desde JSON
-if os.path.exists(BALLENAS_FILE):
-    with open(BALLENAS_FILE, "r") as f:
-        ballenas = json.load(f)
-else:
-    ballenas = {}
+def load_data():
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
 
-# Guardar ballenas en JSON
-def save_ballenas():
-    with open(BALLENAS_FILE, "w") as f:
-        json.dump(ballenas, f, indent=2)
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-# Comandos
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Bienvenido al bot de XRP Whales!\n"
-        "Usa /add, /delete o /list para gestionar ballenas."
-    )
+# --- Telegram Handlers ---
+async def start(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Bienvenido al monitor de Ballenas XRP!")
 
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_ballena(update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
         await update.message.reply_text("Uso: /add <direccion>")
         return
     addr = context.args[0]
-    if addr in ballenas:
-        await update.message.reply_text("⚠️ Ballena ya registrada.")
-    else:
-        ballenas[addr] = []
-        save_ballenas()
-        await update.message.reply_text(f"✅ Ballena {addr} agregada.")
+    data = load_data()
+    if addr in data["ballenas"]:
+        await update.message.reply_text("⚠️ Ballena ya registrada")
+        return
+    data["ballenas"].append(addr)
+    save_data(data)
+    await update.message.reply_text(f"✅ Ballena agregada: {addr}")
 
-async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def delete_ballena(update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
         await update.message.reply_text("Uso: /delete <direccion>")
         return
     addr = context.args[0]
-    if addr in ballenas:
-        del ballenas[addr]
-        save_ballenas()
-        await update.message.reply_text(f"❌ Ballena {addr} eliminada.")
-    else:
-        await update.message.reply_text("⚠️ Ballena no encontrada.")
-
-async def list_ballenas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not ballenas:
-        await update.message.reply_text("No hay ballenas registradas.")
+    data = load_data()
+    if addr not in data["ballenas"]:
+        await update.message.reply_text("⚠️ Ballena no encontrada")
         return
-    msg = "🐋 Ballenas registradas:\n"
-    for addr in ballenas.keys():
-        msg += f"- {addr}\n"
-    await update.message.reply_text(msg)
+    data["ballenas"].remove(addr)
+    save_data(data)
+    await update.message.reply_text(f"❌ Ballena eliminada: {addr}")
 
-# Inicializar bot
-app = Application.builder().token(BOT_TOKEN).build()
+async def list_ballenas(update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+    if not data["ballenas"]:
+        await update.message.reply_text("No hay ballenas registradas")
+        return
+    texto = "📋 Ballenas:\n" + "\n".join(data["ballenas"])
+    await update.message.reply_text(texto)
 
-# Registrar comandos
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("add", add))
-app.add_handler(CommandHandler("delete", delete))
-app.add_handler(CommandHandler("list", list_ballenas))
+async def set_min(update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("Uso: /setmin <usd>")
+        return
+    try:
+        min_usd = int(context.args[0])
+    except:
+        await update.message.reply_text("Ingresa un número válido")
+        return
+    data = load_data()
+    data["min_usd"] = min_usd
+    save_data(data)
+    await update.message.reply_text(f"✅ Monto mínimo actualizado: ${min_usd}")
 
-# Registrar comandos visibles en Telegram
-app.bot.set_my_commands([
-    BotCommand("start", "Inicia el bot"),
-    BotCommand("add", "Agrega una ballena"),
-    BotCommand("delete", "Elimina una ballena"),
-    BotCommand("list", "Lista ballenas registradas")
-])
+# --- Función para obtener precio XRP USD de CoinGecko ---
+async def get_xrp_price():
+    async with httpx.AsyncClient() as client:
+        resp = await client.get("https://api.coingecko.com/api/v3/simple/price?ids=ripple&vs_currencies=usd")
+        return resp.json()["ripple"]["usd"]
 
-# Ejecutar bot
+# --- Función para chequear Whale Alert ---
+async def check_whale_alert(bot):
+    while True:
+        data = load_data()
+        if not data["ballenas"]:
+            await asyncio.sleep(CHECK_INTERVAL)
+            continue
+
+        async with httpx.AsyncClient() as client:
+            url = f"https://api.whale-alert.io/v1/transactions?api_key={WH_API_KEY}&min_value={data['min_usd']}&currency=xrp"
+            resp = await client.get(url)
+            result = resp.json()
+            for tx in result.get("transactions", []):
+                addr = tx.get("from")
+                if addr not in data["ballenas"]:
+                    continue
+
+                tx_id = tx["hash"]
+                if data["last_tx"].get(addr) == tx_id:
+                    continue  # ya enviado
+                data["last_tx"][addr] = tx_id
+                save_data(data)
+
+                # Emoji según tipo y dirección
+                tipo = "💰" if tx["direction"]=="in" else "🛑"
+                tipo += " ⬆️" if tx.get("long") else " ⬇️"
+
+                xrp_usd = await get_xrp_price()
+                amount_usd = round(tx["amount"] * xrp_usd,2)
+
+                msg = f"{tipo} Ballena {addr}:\n{tx['amount']} XRP (~${amount_usd})\n{tx['hash']}"
+                await bot.send_message(chat_id=CHAT_ID, text=msg)
+        await asyncio.sleep(CHECK_INTERVAL)
+
+# --- Main ---
+async def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Comandos
+    await app.bot.set_my_commands([
+        BotCommand("start", "Iniciar bot"),
+        BotCommand("add", "Agregar ballena"),
+        BotCommand("delete", "Eliminar ballena"),
+        BotCommand("list", "Listar ballenas"),
+        BotCommand("setmin", "Establecer mínimo de transacción"),
+    ])
+
+    # Handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add_ballena))
+    app.add_handler(CommandHandler("delete", delete_ballena))
+    app.add_handler(CommandHandler("list", list_ballenas))
+    app.add_handler(CommandHandler("setmin", set_min))
+
+    # Ejecutar loop de Whale Alert
+    asyncio.create_task(check_whale_alert(app.bot))
+
+    await app.run_polling()
+
 if __name__ == "__main__":
-    print("🤖 Bot iniciado...")
-    app.run_polling()
+    asyncio.run(main())
