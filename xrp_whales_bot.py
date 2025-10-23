@@ -16,9 +16,6 @@ XRPSCAN_APIS = [
     # "https://backup.xrpscan.com/api/v1",  # ejemplo de backup
 ]
 
-# Whale Alert (opcional)
-WHALE_ALERT_API_KEY = os.getenv("WHALE_ALERT_API_KEY", "")
-
 # Filtrar transacciones grandes
 MIN_USD_VALUE = 5_000_000
 POLL_INTERVAL = 60  # segundos entre consultas
@@ -28,9 +25,10 @@ seen_tx_hashes = set()
 
 
 # ---------------- Funciones ---------------- #
-def fetch_xrpscan_transactions(account="rEXAMPLE"):  # pon la cuenta que quieras seguir
+def fetch_xrpscan_transactions(account="rEXAMPLE"):
     """
-    Intenta obtener datos de XRPSCAN desde varias APIs hasta que una funcione
+    Intenta obtener datos de XRPSCAN desde varias APIs hasta que una funcione.
+    Hace failover automático si alguna API falla.
     """
     for api in XRPSCAN_APIS:
         try:
@@ -38,16 +36,20 @@ def fetch_xrpscan_transactions(account="rEXAMPLE"):  # pon la cuenta que quieras
             resp = requests.get(url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
+
             transactions = data.get("transactions", [])
             new_tx = []
             for tx in transactions:
                 tx_hash = tx.get("hash")
                 if tx_hash in seen_tx_hashes:
                     continue
-                seen_tx_hashes.add(tx_hash)
-                amount_usd = float(tx.get("amount_usd", 0))  # asumimos que la API da monto en USD
+
+                # Suponemos que la API devuelve "amount_usd" o "amount" en USD
+                amount_usd = float(tx.get("amount_usd", tx.get("amount", 0)))
                 if amount_usd < MIN_USD_VALUE:
                     continue
+
+                seen_tx_hashes.add(tx_hash)
                 new_tx.append({
                     "hash": tx_hash,
                     "from": tx.get("from"),
@@ -56,8 +58,8 @@ def fetch_xrpscan_transactions(account="rEXAMPLE"):  # pon la cuenta que quieras
                 })
             return new_tx
         except Exception as e:
-            print(f"Error con {api}: {e}")
-    return []
+            print(f"❌ Error con {api}: {e}, intentando siguiente API...")
+    return []  # Ninguna API funcionó
 
 
 async def send_telegram_alert(app, tx):
@@ -99,7 +101,7 @@ if __name__ == "__main__":
     # Comando /start
     app.add_handler(CommandHandler("start", start))
 
-    # Agregar job periódico cada POLL_INTERVAL segundos
+    # Job periódico
     app.job_queue.run_repeating(check_whales, interval=POLL_INTERVAL, first=0)
 
     print("Bot XRP Whales iniciado...")
