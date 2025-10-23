@@ -3,8 +3,9 @@ services:
     name: xrp-whales-bot
     env: python
     plan: free
-    pythonVersion: 3.13.1  # <- versión estable compatible
+    pythonVersion: 3.11.13  # <- versión estable compatible
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python xrp_whales_bot.py
+
 
 
