@@ -1,7 +1,6 @@
 import os
 import requests
 import asyncio
-from telegram import Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 
@@ -14,8 +13,7 @@ USER_ID = os.getenv("USER_ID")  # Tu chat_id de Telegram
 # Lista de APIs públicas de XRPSCAN (puedes añadir más backups)
 XRPSCAN_APIS = [
     "https://api.xrpscan.com/api/v1",
-    "https://api2.xrpscan.com/api/v1",  # ejemplo de backup
-    "https://api3.xrpscan.com/api/v1",  # otro backup
+    # "https://backup.xrpscan.com/api/v1",  # ejemplo de backup
 ]
 
 # Whale Alert (opcional)
@@ -24,9 +22,6 @@ WHALE_ALERT_API_KEY = os.getenv("WHALE_ALERT_API_KEY", "")
 # Filtrar transacciones grandes
 MIN_USD_VALUE = 5_000_000
 POLL_INTERVAL = 60  # segundos entre consultas
-
-# Inicializar bot
-bot = Bot(token=BOT_TOKEN)
 
 # Guardar transacciones ya enviadas para evitar duplicados
 seen_tx_hashes = set()
@@ -49,30 +44,23 @@ def fetch_xrpscan_transactions(account="rEXAMPLE"):  # pon la cuenta que quieras
                 tx_hash = tx.get("hash")
                 if tx_hash in seen_tx_hashes:
                     continue
-                # Convertir amount a float y filtrar por MIN_USD_VALUE
-                try:
-                    amount = float(tx.get("amount", 0))
-                except:
-                    amount = 0
-                if amount < MIN_USD_VALUE:
-                    continue
                 seen_tx_hashes.add(tx_hash)
+                amount_usd = float(tx.get("amount_usd", 0))  # asumimos que la API da monto en USD
+                if amount_usd < MIN_USD_VALUE:
+                    continue
                 new_tx.append({
                     "hash": tx_hash,
                     "from": tx.get("from"),
                     "to": tx.get("to"),
-                    "amount": amount,
+                    "amount": amount_usd,
                 })
-            print(f"✅ Datos obtenidos correctamente desde {api}")
             return new_tx
         except Exception as e:
-            print(f"❌ Error con {api}: {e}")
-            continue  # intenta la siguiente API
-    print("⚠️ Todas las APIs de XRPSCAN fallaron")
+            print(f"Error con {api}: {e}")
     return []
 
 
-async def send_telegram_alert(tx):
+async def send_telegram_alert(app, tx):
     """
     Envía la alerta de Telegram
     """
@@ -83,16 +71,17 @@ async def send_telegram_alert(tx):
         f"A: {tx['to']}\n"
         f"[Ver transacción](https://xrpscan.com/tx/{tx['hash']})"
     )
-    await bot.send_message(chat_id=USER_ID, text=message, parse_mode="Markdown")
+    await app.bot.send_message(chat_id=USER_ID, text=message, parse_mode="Markdown")
 
 
 async def check_whales(context: ContextTypes.DEFAULT_TYPE):
     """
     Función periódica para chequear transacciones grandes
     """
+    app = context.application
     transactions = fetch_xrpscan_transactions()
     for tx in transactions:
-        await send_telegram_alert(tx)
+        await send_telegram_alert(app, tx)
 
 
 # ---------------- Comandos de Telegram ---------------- #
@@ -111,8 +100,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
 
     # Agregar job periódico cada POLL_INTERVAL segundos
-    job_queue = app.job_queue
-    job_queue.run_repeating(check_whales, interval=POLL_INTERVAL, first=0)
+    app.job_queue.run_repeating(check_whales, interval=POLL_INTERVAL, first=0)
 
     print("Bot XRP Whales iniciado...")
     app.run_polling()
