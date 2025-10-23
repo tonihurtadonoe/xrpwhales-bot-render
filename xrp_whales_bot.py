@@ -4,8 +4,8 @@ from telegram import Bot, ParseMode
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
 # ---------------- Configuración ---------------- #
-TOKEN = "7750255822:AAG1tElixPESOV4ZHtwufvdzcvNzbEhUOHM"
-CHAT_ID = 278754715  # Tu ID de Telegram
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+USER_ID = os.getenv("USER_ID")
 WHALE_ALERT_API_KEY = "TU_API_KEY_DE_WHALE_ALERT"  # Pon tu API Key de Whale Alert
 XRPSCAN_API_KEY = "TU_API_KEY_DE_XRPSCAN"  # Pon tu API Key de XRPSCAN si quieres usarlo
 
@@ -95,3 +95,4 @@ if __name__ == "__main__":
 
     print("Bot XRP Whales iniciado...")
     app.run_polling()
+
