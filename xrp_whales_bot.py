@@ -14,7 +14,8 @@ USER_ID = os.getenv("USER_ID")  # Tu chat_id de Telegram
 # Lista de APIs públicas de XRPSCAN (puedes añadir más backups)
 XRPSCAN_APIS = [
     "https://api.xrpscan.com/api/v1",
-    # "https://backup.xrpscan.com/api/v1",  # ejemplo de backup
+    "https://api2.xrpscan.com/api/v1",  # ejemplo de backup
+    "https://api3.xrpscan.com/api/v1",  # otro backup
 ]
 
 # Whale Alert (opcional)
@@ -62,9 +63,12 @@ def fetch_xrpscan_transactions(account="rEXAMPLE"):  # pon la cuenta que quieras
                     "to": tx.get("to"),
                     "amount": amount,
                 })
+            print(f"✅ Datos obtenidos correctamente desde {api}")
             return new_tx
         except Exception as e:
-            print(f"Error con {api}: {e}")
+            print(f"❌ Error con {api}: {e}")
+            continue  # intenta la siguiente API
+    print("⚠️ Todas las APIs de XRPSCAN fallaron")
     return []
 
 
