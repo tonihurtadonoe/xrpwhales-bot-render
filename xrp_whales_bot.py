@@ -42,19 +42,25 @@ def fetch_xrpscan_transactions(account="rEXAMPLE"):  # pon la cuenta que quieras
             resp = requests.get(url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
-            # Aquí procesas la data según lo que necesites (ejemplo)
             transactions = data.get("transactions", [])
             new_tx = []
             for tx in transactions:
                 tx_hash = tx.get("hash")
                 if tx_hash in seen_tx_hashes:
                     continue
+                # Convertir amount a float y filtrar por MIN_USD_VALUE
+                try:
+                    amount = float(tx.get("amount", 0))
+                except:
+                    amount = 0
+                if amount < MIN_USD_VALUE:
+                    continue
                 seen_tx_hashes.add(tx_hash)
                 new_tx.append({
                     "hash": tx_hash,
                     "from": tx.get("from"),
                     "to": tx.get("to"),
-                    "amount": tx.get("amount"),
+                    "amount": amount,
                 })
             return new_tx
         except Exception as e:
