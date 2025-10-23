@@ -1,115 +1,181 @@
-import os
 import json
-import logging
-import asyncio
 import requests
-from datetime import datetime
-from telegram import Bot, ParseMode
-from telegram.ext import Updater, CommandHandler, CallbackContext
-from telegram.update import Update
-
-# --- CONFIGURACIÓN DE LOGGING ---
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=os.getenv("LOG_LEVEL", "INFO")
+import threading
+import websocket
+import os
+import logging
+import time
+from telegram import Update, Bot
+from telegram.constants import ParseMode
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
 )
-logger = logging.getLogger(__name__)
 
-# --- VARIABLES GLOBALES ---
-TELEGRAM_TOKEN = os.getenv("TOKEN")  # Token del bot (desde Render)
-AUTHORIZED_USER_ID = int(os.getenv("USER_ID", "278754715"))  # Tu user ID
-DATA_FILE = "whales.json"
-MIN_USD_THRESHOLD = 5_000_000  # Mínimo por defecto
+# ===== CONFIGURACIÓN =====
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
+)
 
-# --- FUNCIONES DE UTILIDAD ---
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w") as f:
-            json.dump({"transactions": []}, f)
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+TOKEN = os.environ.get("TOKEN")
+USER_ID = 278754715  # Tu ID numérico de Telegram
+WHALES_FILE = "whales.json"
+CONFIG_FILE = "config.json"
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+if not TOKEN:
+    logging.error("❌ TOKEN no definido en variables de entorno")
+    exit()
 
-def format_transaction(tx):
-    """Formato bonito del mensaje de transacción"""
-    direction = "🟢 Compra (Long)" if tx.get("type") == "buy" else "🔴 Venta (Short)"
-    return (
-        f"{direction}\n"
-        f"💰 **{tx['amount_usd']:,} USD**\n"
-        f"📊 XRP: {tx['amount_xrp']:,}\n"
-        f"🔗 Hash: [{tx['hash']}](https://xrpscan.com/tx/{tx['hash']})\n"
-        f"🕒 {tx['timestamp']}"
-    )
+# ===== LÍMITE DE ALERTA =====
+USD_THRESHOLD = 5_000_000  # Límite por defecto en USD
 
-# --- COMANDOS DE TELEGRAM ---
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text(
-        "👋 Bienvenido al bot XRP Whales.\n"
-        "Te avisaré cuando haya movimientos grandes en la red XRP.\n"
-        f"🔹 Límite actual: ${MIN_USD_THRESHOLD:,} USD"
-    )
+# Cargar límite desde archivo si existe
+try:
+    with open(CONFIG_FILE, "r") as f:
+        data = json.load(f)
+        USD_THRESHOLD = data.get("USD_THRESHOLD", USD_THRESHOLD)
+except FileNotFoundError:
+    pass
 
-def set_threshold(update: Update, context: CallbackContext):
-    """Permite cambiar el umbral desde Telegram"""
-    if update.effective_user.id != AUTHORIZED_USER_ID:
-        return update.message.reply_text("🚫 No tienes permiso para usar este comando.")
-    
-    global MIN_USD_THRESHOLD
+# ===== FUNCIONES BASE =====
+def load_whales():
     try:
-        value = float(context.args[0])
-        MIN_USD_THRESHOLD = value
-        update.message.reply_text(f"✅ Límite cambiado a ${MIN_USD_THRESHOLD:,} USD.")
-    except (IndexError, ValueError):
-        update.message.reply_text("Uso: /setlimit <monto_en_usd>")
+        with open(WHALES_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return []
 
-def check_whales(bot: Bot):
-    """Simula lectura de API de transacciones XRP y envía alertas"""
-    data = load_data()
-    last_tx = data["transactions"]
+def save_whales(data):
+    with open(WHALES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-    # --- Ejemplo de simulación (puedes reemplazar con API real) ---
-    simulated_tx = {
-        "hash": f"TX-{datetime.utcnow().strftime('%H%M%S')}",
-        "amount_usd": 5_500_000,
-        "amount_xrp": 8_800_000,
-        "type": "buy",
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    }
+async def send_alert(message: str):
+    if USER_ID:
+        await bot.send_message(chat_id=USER_ID, text=message, parse_mode=ParseMode.MARKDOWN)
 
-    if simulated_tx["amount_usd"] >= MIN_USD_THRESHOLD:
-        message = format_transaction(simulated_tx)
-        bot.send_message(
-            chat_id=AUTHORIZED_USER_ID,
-            text=message,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-        last_tx.append(simulated_tx)
-        save_data(data)
-        logger.info(f"Notificación enviada: {simulated_tx['hash']}")
+# ===== COMANDOS DEL BOT =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_alert("👋 Bot iniciado ✅")
+    await update.message.reply_text(
+        "👋 Bot activo. Usos:\n"
+        "/add <wallet> <nombre>\n"
+        "/del <wallet>\n"
+        "/list\n"
+        "/setlimit <USD>\n"
+        f"Monitoreando transacciones grandes > ${USD_THRESHOLD:,}..."
+    )
 
-async def main():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
-    dp = updater.dispatcher
+async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    whales = load_whales()
+    if len(context.args) < 2:
+        await update.message.reply_text("Uso: /add <wallet> <nombre>")
+        return
+    address, name = context.args[0], " ".join(context.args[1:])
+    whales.append({"address": address, "name": name})
+    save_whales(whales)
+    await update.message.reply_text(f"✅ Añadido {name} ({address})")
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("setlimit", set_threshold))
+async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    whales = load_whales()
+    if not context.args:
+        await update.message.reply_text("Uso: /del <wallet>")
+        return
+    address = context.args[0]
+    whales = [w for w in whales if w["address"] != address]
+    save_whales(whales)
+    await update.message.reply_text(f"🗑️ Eliminado {address}")
 
-    updater.start_polling()
-    logger.info("🤖 Bot iniciado correctamente (Python 3.13.4).")
+async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    whales = load_whales()
+    if not whales:
+        await update.message.reply_text("No hay ballenas registradas.")
+    else:
+        text = "\n".join([f"• {w['name']}: `{w['address']}`" for w in whales])
+        await update.message.reply_text(f"🐋 *Ballenas monitoreadas:*\n{text}", parse_mode=ParseMode.MARKDOWN)
 
-    # Ciclo de comprobación cada 2 minutos
-    while True:
+async def set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global USD_THRESHOLD
+    if not context.args:
+        await update.message.reply_text(f"Uso: /setlimit <monto_en_USD>\nLímite actual: ${USD_THRESHOLD:,}")
+        return
+    try:
+        USD_THRESHOLD = float(context.args[0])
+        await update.message.reply_text(f"✅ Límite actualizado a ${USD_THRESHOLD:,}")
+        # Guardar en archivo para persistencia
+        with open(CONFIG_FILE, "w") as f:
+            json.dump({"USD_THRESHOLD": USD_THRESHOLD}, f)
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido. Escribe un número.")
+
+# ===== MONITOREO XRP =====
+def on_message(ws, msg):
+    data = json.loads(msg)
+    if "transaction" in data and data["transaction"]["TransactionType"] == "Payment":
+        amount_drops = int(data["transaction"].get("Amount", 0))
+        amount_xrp = amount_drops / 1_000_000
+        sender = data["transaction"]["Account"]
+        receiver = data["transaction"]["Destination"]
+        tx_hash = data["transaction"]["hash"]
+
+        # Obtener precio XRP/USD
         try:
-            check_whales(bot)
-            await asyncio.sleep(120)
-        except Exception as e:
-            logger.error(f"Error en ciclo principal: {e}")
-            await asyncio.sleep(60)
+            r = requests.get("https://api.coincap.io/v2/assets/ripple")
+            price = float(r.json()["data"]["priceUsd"])
+        except:
+            price = 0
 
-if __name__ == "__main__":
-    asyncio.run(main())
+        usd_value = amount_xrp * price
+        if usd_value < USD_THRESHOLD:
+            return  # Ignorar si no supera el límite
+
+        whales = load_whales()
+        for w in whales:
+            if sender == w["address"] or receiver == w["address"]:
+                direction = "💹 Largo" if receiver == w["address"] else "📉 Corto"
+                message = (
+                    f"🐋 *Movimiento detectado!*\n"
+                    f"💸 {amount_xrp:.2f} XRP (~${usd_value:,.2f})\n"
+                    f"🏦 {w['name']}\n"
+                    f"🔗 [Ver en XRPSCAN](https://xrpscan.com/tx/{tx_hash})\n"
+                    f"{direction}"
+                )
+                # asyncio.run(send_alert(message)) won't work here because websocket is sync
+                # usamos threading
+                threading.Thread(target=lambda: asyncio.run(send_alert(message)), daemon=True).start()
+
+def start_websocket():
+    ws = websocket.WebSocketApp("wss://s1.ripple.com", on_message=on_message)
+    ws.run_forever()
+
+# ===== INICIO BOT =====
+import asyncio
+bot = Bot(token=TOKEN)
+app = ApplicationBuilder().token(TOKEN).build()
+
+# Handlers
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("add", add_whale))
+app.add_handler(CommandHandler("del", del_whale))
+app.add_handler(CommandHandler("list", list_whales))
+app.add_handler(CommandHandler("setlimit", set_limit))
+
+# WebSocket en segundo plano
+threading.Thread(target=start_websocket, daemon=True).start()
+
+# ===== FLASK PORT FALSO PARA RENDER GRATIS =====
+import flask
+from threading import Thread
+flask_app = flask.Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "Bot XRP Whales corriendo ✅"
+
+Thread(target=lambda: flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))).start()
+
+# ===== RUN TELEGRAM BOT =====
+logging.info("✅ Bot ejecutándose")
+app.run_polling()
