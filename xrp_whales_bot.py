@@ -1,63 +1,93 @@
+import json
 import os
-import asyncio
-import httpx
-from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackContext
+import requests
+import asyncio
 
-# Carga variables de entorno
-load_dotenv()
+# --- CONFIG ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Asegúrate de poner tu token aquí en Render
+TRACKED_FILE = "tracked_whales.json"
+CHECK_INTERVAL = 60  # Segundos entre comprobaciones
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # Chat donde mandarás alertas
-XRPL_API = os.getenv("XRPL_API")  # Endpoint de tu API para whales
+# --- HELPER: cargar whales ---
+if os.path.exists(TRACKED_FILE):
+    with open(TRACKED_FILE, "r") as f:
+        tracked_whales = json.load(f)
+else:
+    tracked_whales = []
 
-if not BOT_TOKEN or not CHAT_ID or not XRPL_API:
-    raise ValueError("BOT_TOKEN, CHAT_ID y XRPL_API deben estar definidos.")
+# --- HELPER: guardar whales ---
+def save_whales():
+    with open(TRACKED_FILE, "w") as f:
+        json.dump(tracked_whales, f)
 
-# Comando /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot iniciado ✅ listo para alertas de whales XRP.")
+# --- COMANDOS ---
 
-# Comando /status (opcional)
+# /add <direccion>
+async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("Uso: /add <direccion>")
+        return
+    address = context.args[0]
+    if address in tracked_whales:
+        await update.message.reply_text("Esta dirección ya está en seguimiento.")
+    else:
+        tracked_whales.append(address)
+        save_whales()
+        await update.message.reply_text(f"Dirección {address} añadida.")
+
+# /delete <direccion>
+async def delete_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("Uso: /delete <direccion>")
+        return
+    address = context.args[0]
+    if address in tracked_whales:
+        tracked_whales.remove(address)
+        save_whales()
+        await update.message.reply_text(f"Dirección {address} eliminada.")
+    else:
+        await update.message.reply_text("La dirección no está en seguimiento.")
+
+# /list
+async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not tracked_whales:
+        await update.message.reply_text("No hay direcciones en seguimiento.")
+    else:
+        message = "Direcciones en seguimiento:\n" + "\n".join(tracked_whales)
+        await update.message.reply_text(message)
+
+# /status
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot corriendo y conectado a XRP API.")
+    await update.message.reply_text(f"Tracking {len(tracked_whales)} whales.")
 
-# Función para revisar whales
-async def check_whales(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(XRPL_API)
-            data = response.json()
-            
-            # Ejemplo: lógica de detección de whales
-            whales = data.get("whales", [])
-            for whale in whales:
-                amount = whale.get("amount")
-                address = whale.get("address")
-                tx_hash = whale.get("tx_hash")
-                if amount >= 100000:  # mínimo para alertar
-                    message = f"🚨 Whale XRP detectada!\nMonto: {amount}\nDirección: {address}\nTX: {tx_hash}"
-                    await context.bot.send_message(chat_id=CHAT_ID, text=message)
-    except Exception as e:
-        print("Error en check_whales:", e)
+# --- FUNCION DE ALERTAS (simulada) ---
+async def check_whales(context: CallbackContext):
+    for address in tracked_whales:
+        # Aquí iría la lógica real para comprobar transacciones en XRP
+        # Ejemplo: response = requests.get(f"https://api.xrpscan.com/api/account/{address}/transactions")
+        # Por ahora simulamos
+        print(f"Comprobando {address}...")  
 
-# Función principal
-async def main():
-    # Crea la aplicación
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+# --- CONFIG BOT ---
+app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers de comandos
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status))
+# Comandos
+app.add_handler(CommandHandler("add", add_whale))
+app.add_handler(CommandHandler("delete", delete_whale))
+app.add_handler(CommandHandler("list", list_whales))
+app.add_handler(CommandHandler("status", status))
 
-    # JobQueue para revisar whales cada minuto
-    job_queue: JobQueue = app.job_queue
-    job_queue.run_repeating(check_whales, interval=60, first=5)  # cada 60s
+# Tarea periódica de comprobación
+async def periodic_check():
+    while True:
+        await check_whales(None)
+        await asyncio.sleep(CHECK_INTERVAL)
 
-    print("Bot corriendo...")
-    await app.run_polling()
+app.job_queue.run_repeating(check_whales, interval=CHECK_INTERVAL, first=10)
 
-# Ejecuta el bot
+# --- RUN ---
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("Bot iniciado...")
+    asyncio.get_event_loop().run_until_complete(app.run_polling())
