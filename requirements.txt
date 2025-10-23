@@ -1,5 +1,4 @@
 python-telegram-bot==20.6
-
 requests==2.32.5
 websocket-client==1.9.0
 tornado==6.1
@@ -12,7 +11,10 @@ certifi==2025.10.5
 urllib3==2.5.0
 charset_normalizer==3.4.4
 idna==3.11
+flask==2.4.3
+
    
+
 
 
 
