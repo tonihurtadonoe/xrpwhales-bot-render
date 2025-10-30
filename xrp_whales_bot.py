@@ -10,8 +10,8 @@ import websocket
 import os
 import time
 import logging
-from telegram import Update
-from telegram.constants import ParseMode
+import pytz
+from telegram import Update, ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ===== CONFIG =====
@@ -61,15 +61,15 @@ def save_config():
     with open(CONFIG_FILE, "w") as f:
         json.dump({"USD_THRESHOLD": USD_THRESHOLD}, f, indent=2)
 
-def authorized(update: Update):
+async def authorized(update: Update):
     """Verifica si el usuario es el dueño del bot."""
     user_id = update.effective_user.id
     if str(user_id) != str(USER_ID):
-        update.message.reply_text("🚫 No tienes permiso para usar este comando.")
+        await update.message.reply_text("🚫 No tienes permiso para usar este comando.")
         return False
     return True
 
-async def send_alert(message: str):
+async def send_alert(application, message: str):
     try:
         await application.bot.send_message(
             chat_id=USER_ID,
@@ -93,7 +93,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not authorized(update):
+    if not await authorized(update):
         return
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /add <wallet> <nombre>")
@@ -108,7 +108,7 @@ async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Añadido {name} ({address})")
 
 async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not authorized(update):
+    if not await authorized(update):
         return
     if not context.args:
         await update.message.reply_text("Uso: /del <wallet>")
@@ -128,7 +128,7 @@ async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global USD_THRESHOLD
-    if not authorized(update):
+    if not await authorized(update):
         return
     if not context.args:
         await update.message.reply_text(f"Límite actual: ${USD_THRESHOLD:,.0f}\nUso: /setlimit <USD>")
@@ -181,15 +181,15 @@ def on_message(ws, msg):
         addr = w["address"]
         if sender == addr or receiver == addr:
             direction = "💹 *Compra / Largo*" if receiver == addr else "📉 *Venta / Corto*"
-            msg = (
+            msg_text = (
                 f"🐋 *Movimiento detectado!*\n"
                 f"💰 {amount_xrp:,.0f} XRP (~${usd_value:,.0f})\n"
                 f"🏦 {w['name']}\n"
                 f"{direction}\n"
                 f"🔗 [Ver en XRPScan](https://xrpscan.com/tx/{tx_hash})"
             )
-            import asyncio
-            asyncio.run(send_alert(msg))
+            # send_alert requiere el objeto application
+            threading.Thread(target=lambda: asyncio.run(send_alert(application, msg_text)), daemon=True).start()
 
 def start_websocket():
     while True:
@@ -206,17 +206,21 @@ def start_websocket():
             time.sleep(5)
 
 # ===== TELEGRAM + FLASK =====
-application = ApplicationBuilder().token(TOKEN).build()
+import asyncio
+from flask import Flask
+
+application = ApplicationBuilder().token(TOKEN).timezone(pytz.UTC).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("add", add_whale))
 application.add_handler(CommandHandler("del", del_whale))
 application.add_handler(CommandHandler("list", list_whales))
 application.add_handler(CommandHandler("setlimit", set_limit))
 
+# WebSocket en hilo aparte
 threading.Thread(target=start_websocket, daemon=True).start()
 
+# Flask en Render
 try:
-    from flask import Flask
     app = Flask(__name__)
 
     @app.route("/")
@@ -228,6 +232,7 @@ try:
 except Exception:
     logging.warning("Flask no disponible (solo necesario en Render).")
 
+# ===== START BOT =====
 if __name__ == "__main__":
     logging.info("Bot iniciado con límite: $%s", USD_THRESHOLD)
     application.run_polling()
