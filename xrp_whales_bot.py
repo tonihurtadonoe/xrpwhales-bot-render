@@ -1,181 +1,145 @@
-import asyncio
-import json
-import requests
-import websocket
 import os
+import asyncio
 import logging
-import pytz
-from telegram import Update
-from telegram.constants import ParseMode
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import requests
 from flask import Flask
-from threading import Thread
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    CommandHandler,
+)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import pytz
 
-# =============================
-# CONFIGURACIÓN INICIAL
-# =============================
-logging.basicConfig(level=logging.INFO)
+# -----------------------------
+# CONFIGURACIÓN GENERAL
+# -----------------------------
+TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@xrpwhales")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 60))  # segundos
 
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-USER_ID = os.environ.get("TELEGRAM_CHAT_ID")
-WHALES_FILE = "whales.json"
-CONFIG_FILE = "config.json"
+API_URL = "https://api.whale-alert.io/v1/transactions"
+API_KEY = os.getenv("WHALE_ALERT_API_KEY")
 
-if not TOKEN:
-    raise SystemExit("❌ TELEGRAM_TOKEN no encontrado.")
+# -----------------------------
+# LOGGING
+# -----------------------------
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-try:
-    USER_ID = int(USER_ID)
-except Exception:
-    USER_ID = str(USER_ID)
+# -----------------------------
+# FLASK APP (para mantener Render activo)
+# -----------------------------
+app = Flask(__name__)
 
-# Umbral por defecto en USD
-USD_THRESHOLD = 5_000_000.0
-try:
-    with open(CONFIG_FILE, "r") as f:
-        USD_THRESHOLD = float(json.load(f).get("USD_THRESHOLD", USD_THRESHOLD))
-except:
-    pass
+@app.route("/")
+def home():
+    return "✅ XRP Whales Bot is running on Render!"
 
+# -----------------------------
+# FUNCIÓN PARA OBTENER TRANSACCIONES
+# -----------------------------
+last_seen_tx = set()
 
-# =============================
-# FUNCIONES AUXILIARES
-# =============================
-
-def load_whales():
+def fetch_whale_transactions():
     try:
-        with open(WHALES_FILE) as f:
-            return json.load(f)
-    except:
+        response = requests.get(
+            API_URL,
+            params={"api_key": API_KEY, "currency": "xrp", "min_value": 500000},
+            timeout=10
+        )
+        data = response.json()
+        transactions = data.get("transactions", [])
+        logger.info(f"Fetched {len(transactions)} transactions.")
+        return transactions
+    except Exception as e:
+        logger.error(f"Error fetching transactions: {e}")
         return []
 
+# -----------------------------
+# PROCESAMIENTO DE TRANSACCIONES
+# -----------------------------
+def parse_transaction(tx):
+    tx_id = tx.get("hash")
+    amount = tx.get("amount")
+    sender = tx.get("from", {}).get("owner_type", "unknown")
+    receiver = tx.get("to", {}).get("owner_type", "unknown")
+    timestamp = tx.get("timestamp")
 
-def save_whales(data):
-    with open(WHALES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    direction = "🟢 Buy (to exchange)" if receiver == "exchange" else "🔴 Sell (from exchange)"
+    message = (
+        f"🐋 <b>Whale Alert - XRP</b>\n"
+        f"{direction}\n"
+        f"💰 Amount: {amount:,.0f} XRP\n"
+        f"📤 From: {sender}\n"
+        f"📥 To: {receiver}\n"
+        f"⏰ Timestamp: {timestamp}\n"
+        f"#XRP #WhaleAlert"
+    )
 
+    return tx_id, message
 
-def save_config():
-    with open(CONFIG_FILE, "w") as f:
-        json.dump({"USD_THRESHOLD": USD_THRESHOLD}, f, indent=2)
+# -----------------------------
+# ENVÍO DE ALERTAS A TELEGRAM
+# -----------------------------
+async def send_whale_alert(context: ContextTypes.DEFAULT_TYPE):
+    transactions = fetch_whale_transactions()
+    global last_seen_tx
 
-
-def authorized(update: Update):
-    return str(update.effective_user.id) == str(USER_ID)
-
-
-async def send_alert(app, message: str):
-    """Envía alerta al canal o usuario configurado."""
-    try:
-        await app.bot.send_message(chat_id=USER_ID, text=message, parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        logging.error(f"Error enviando mensaje: {e}")
-
-
-# =============================
-# COMANDOS DE TELEGRAM
-# =============================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"✅ Bot activo.\nUmbral: ${USD_THRESHOLD:,.0f}")
-
-
-# =============================
-# API Y PROCESAMIENTO XRP
-# =============================
-
-def get_xrp_price_usd():
-    try:
-        r = requests.get("https://api.coincap.io/v2/assets/ripple", timeout=5)
-        return float(r.json()["data"]["priceUsd"])
-    except Exception as e:
-        logging.warning(f"Error obteniendo precio XRP: {e}")
-        return None
-
-
-def on_message(ws, msg, app):
-    """Procesa mensajes recibidos del WebSocket de Ripple."""
-    try:
-        data = json.loads(msg)
-        tx = data.get("transaction") or {}
-        if tx.get("TransactionType") != "Payment":
-            return
-
-        amount_xrp = int(tx["Amount"]) / 1_000_000
-        price = get_xrp_price_usd()
-        if not price or amount_xrp * price < USD_THRESHOLD:
-            return
-
-        sender = tx.get("Account")
-        receiver = tx.get("Destination")
-        whales = load_whales()
-
-        for w in whales:
-            if sender == w["address"] or receiver == w["address"]:
-                direction = "💹 *Compra*" if receiver == w["address"] else "📉 *Venta*"
-                msg_text = (
-                    f"{direction}\n"
-                    f"{amount_xrp:,.0f} XRP (~${amount_xrp * price:,.0f})\n"
-                    f"Tx: `{tx.get('hash')}`"
-                )
-                asyncio.create_task(send_alert(app, msg_text))
-    except Exception as e:
-        logging.error(f"Error en on_message: {e}")
-
-
-def start_ws(app):
-    """Mantiene conexión persistente al WebSocket de Ripple."""
-    while True:
-        try:
-            ws = websocket.WebSocketApp(
-                "wss://s1.ripple.com",
-                on_message=lambda ws, msg: on_message(ws, msg, app),
+    for tx in transactions:
+        tx_id, message = parse_transaction(tx)
+        if tx_id not in last_seen_tx:
+            last_seen_tx.add(tx_id)
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=message,
+                parse_mode="HTML"
             )
-            ws.run_forever()
-        except Exception as e:
-            logging.error(f"WebSocket error: {e}")
-        finally:
-            asyncio.sleep(5)
 
+# -----------------------------
+# COMANDOS DE TELEGRAM
+# -----------------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🐋 XRP Whale Bot is active!")
 
-# =============================
-# FLASK SERVER (Mantener vivo en Render)
-# =============================
-
-app_flask = Flask(__name__)
-
-@app_flask.route("/")
-def home():
-    return "✅ XRP Whales Bot activo"
-
-
-# =============================
-# MAIN
-# =============================
-
+# -----------------------------
+# MAIN ASYNC
+# -----------------------------
 async def main():
-    """Punto de entrada principal asincrónico."""
+    logger.info("Starting XRP Whale Bot...")
 
-    # Crear app de Telegram
-    application = ApplicationBuilder().token(TOKEN).build()
+    # Forzamos el uso de pytz para evitar el error del timezone
+    scheduler = AsyncIOScheduler(timezone=pytz.UTC)
 
-    # Registrar comandos
+    application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .job_queue(scheduler)
+        .build()
+    )
+
+    # Comando /start
     application.add_handler(CommandHandler("start", start))
 
-    # Iniciar WebSocket en hilo separado
-    Thread(target=lambda: start_ws(application), daemon=True).start()
-
-    # Iniciar Flask en hilo separado
-    port = int(os.environ.get("PORT", 10000))
-    Thread(target=lambda: app_flask.run(host="0.0.0.0", port=port), daemon=True).start()
+    # Tarea repetitiva
+    job_queue = application.job_queue
+    job_queue.run_repeating(send_whale_alert, interval=CHECK_INTERVAL, first=10)
 
     # Iniciar el bot
     await application.initialize()
     await application.start()
-    logging.info("🚀 XRP Whales Bot iniciado correctamente.")
+    logger.info("✅ XRP Whale Bot is running.")
     await application.updater.start_polling()
-    await application.updater.idle()
+    await application.run_polling()
 
-
+# -----------------------------
+# EJECUCIÓN PRINCIPAL
+# -----------------------------
 if __name__ == "__main__":
+    import threading
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))).start()
+
     asyncio.run(main())
