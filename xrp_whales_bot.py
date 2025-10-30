@@ -1,135 +1,113 @@
+import json
 import asyncio
-import requests
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-)
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import pytz
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-# ----------------------------
-# CONFIG
-BOT_TOKEN = "TU_BOT_TOKEN"
-CHANNEL_ID = "@tu_canal"  # tu canal o grupo
-WHALE_ALERT_API_KEY = "TU_API_KEY"  # clave de la API real
-# ----------------------------
+# Cargar config.json
+with open("config.json", "r") as f:
+    config = json.load(f)
 
-ballenas_seguidas = {
-    "Whale1": 500000,
-    "Whale2": 300000,
-    "Whale3": 1000000
-}
+BOT_TOKEN = config.get("bot_token")
+whales = config.get("whales", [])
 
-alert_limit = 5
-alert_count = 0
+# Función para guardar whales en config.json
+def save_whales():
+    config["whales"] = whales
+    with open("config.json", "w") as f:
+        json.dump(config, f, indent=4)
 
-# ----------------------------
-# FUNCIONES DE ALERTA
-async def enviar_alerta(context: ContextTypes.DEFAULT_TYPE, tipo: str, nombre: str, cantidad: float):
-    emoji = {"largo": "⬆️", "corto": "⬇️", "venta": "💸"}.get(tipo, "")
-    mensaje = f"{emoji} {nombre} - ${cantidad:,.2f}"
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=mensaje)
+# Comandos del bot
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hola! Soy tu bot de seguimiento de whales XRP. Escribe /help para ver comandos.")
 
-def obtener_alertas_reales():
-    headers = {"Authorization": f"Bearer {WHALE_ALERT_API_KEY}"}
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    commands = (
+        "Comandos disponibles:\n"
+        "/ballenas - Listar todas las whales\n"
+        "/add_whale <address> <min_usd> - Añadir una whale\n"
+        "/del_whale <address> - Borrar una whale\n"
+        "Responde 'hola' o 'hi' para un saludo!"
+    )
+    await update.message.reply_text(commands)
+
+async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not whales:
+        await update.message.reply_text("No hay whales registradas.")
+        return
+    message = "Lista de whales:\n"
+    for w in whales:
+        message += f"- {w['address']} (mínimo USD {w['min_usd']})\n"
+    await update.message.reply_text(message)
+
+async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        response = requests.get("https://api.xrpwhales.com/alerts", headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        print(f"Error al obtener alertas: {e}")
-        return []
-
-async def revisar_alertas(context: ContextTypes.DEFAULT_TYPE):
-    global alert_count
-    if alert_count >= alert_limit:
+        address = context.args[0]
+        min_usd = float(context.args[1])
+    except (IndexError, ValueError):
+        await update.message.reply_text("Uso: /add_whale <address> <min_usd>")
         return
 
-    alertas = obtener_alertas_reales()
-    for alerta in alertas:
-        nombre = alerta.get("name")
-        cantidad = alerta.get("amount")
-        tipo = alerta.get("type")
-        if nombre in ballenas_seguidas:
-            await enviar_alerta(context, tipo, nombre, cantidad)
-            alert_count += 1
-            if alert_count >= alert_limit:
-                break
+    # Verificar si ya existe
+    for w in whales:
+        if w["address"] == address:
+            await update.message.reply_text("La whale ya está registrada.")
+            return
 
-# ----------------------------
-# COMANDOS DE ADMIN
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        nombre = context.args[0]
-        cantidad = float(context.args[1])
-        ballenas_seguidas[nombre] = cantidad
-        await update.message.reply_text(f"✅ Ballena {nombre} agregada con ${cantidad:,.2f}")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Uso: /add <nombre> <cantidad>")
+    whales.append({"address": address, "min_usd": min_usd})
+    save_whales()
+    await update.message.reply_text(f"Whale {address} añadida con mínimo USD {min_usd}.")
 
-async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        nombre = context.args[0]
-        if nombre in ballenas_seguidas:
-            del ballenas_seguidas[nombre]
-            await update.message.reply_text(f"❌ Ballena {nombre} eliminada")
-        else:
-            await update.message.reply_text(f"No existe la ballena {nombre}")
+        address = context.args[0]
     except IndexError:
-        await update.message.reply_text("Uso: /del <nombre>")
+        await update.message.reply_text("Uso: /del_whale <address>")
+        return
 
-async def list_ballenas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if ballenas_seguidas:
-        lista = "\n".join([f"{nombre} - ${cantidad:,.2f}" for nombre, cantidad in ballenas_seguidas.items()])
-        await update.message.reply_text(f"Ballenas seguidas:\n{lista}")
-    else:
-        await update.message.reply_text("No hay ballenas en seguimiento.")
+    for w in whales:
+        if w["address"] == address:
+            whales.remove(w)
+            save_whales()
+            await update.message.reply_text(f"Whale {address} eliminada.")
+            return
+    await update.message.reply_text("No se encontró la whale.")
 
-async def limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global alert_limit
-    try:
-        alert_limit = int(context.args[0])
-        await update.message.reply_text(f"✅ Límite de alertas establecido a {alert_limit}")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Uso: /limit <numero>")
+# Mensajes generales
+async def respond_greetings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower()
+    if text in ["hola", "hi"]:
+        await update.message.reply_text("¡Hola! 👋")
 
-# ----------------------------
-# MENSAJES DE TEXTO
-async def mensajes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.lower()
-    if "hola" in texto:
-        await update.message.reply_text(
-            "¡Hola! 👋\nPara ver las ballenas que seguimos, escribe: ballenas"
-        )
-    elif "ballenas" in texto:
-        if ballenas_seguidas:
-            lista = "\n".join([f"{nombre} - ${cantidad:,.2f}" for nombre, cantidad in ballenas_seguidas.items()])
-            await update.message.reply_text(f"Ballenas seguidas:\n{lista}")
-        else:
-            await update.message.reply_text("No hay ballenas en seguimiento.")
+# Función para reportar acción de whales
+async def report_action(address, action, usd_amount, context: ContextTypes.DEFAULT_TYPE):
+    emoji = ""
+    if action.lower() == "compra":
+        emoji = "⬆️"
+    elif action.lower() == "venta":
+        emoji = "⬇️"
+    elif action.lower() == "transferencia":
+        emoji = "💸"
 
-# ----------------------------
-# FUNCION PRINCIPAL
+    message = f"{emoji} Whale {address} realizó {action} de ${usd_amount}"
+    # Para testing local, imprime. Cambiar a context.bot.send_message si quieres enviar al chat
+    print(message)
+
+# Main
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers de comandos
-    app.add_handler(CommandHandler("add", add))
-    app.add_handler(CommandHandler("del", delete))
-    app.add_handler(CommandHandler("list", list_ballenas))
-    app.add_handler(CommandHandler("limit", limit))
+    # Comandos
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("ballenas", list_whales))
+    app.add_handler(CommandHandler("add_whale", add_whale))
+    app.add_handler(CommandHandler("del_whale", del_whale))
 
-    # Handler de mensajes de texto
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), mensajes))
+    # Mensajes generales
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, respond_greetings))
 
-    # Programar revisión de alertas cada 30 segundos con pytz.UTC
-    scheduler = AsyncIOScheduler(timezone=pytz.UTC)
-    scheduler.add_job(lambda: asyncio.create_task(revisar_alertas(app.bot)), 'interval', seconds=30)
-    scheduler.start()
-
-    print("Bot activo con alertas reales...")
+    print("Bot corriendo...")
     await app.run_polling()
 
-# ----------------------------
 if __name__ == "__main__":
     asyncio.run(main())
