@@ -1,7 +1,8 @@
 import json
 import asyncio
+import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackContext
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
 import pytz
@@ -18,6 +19,9 @@ TIMEZONE = pytz.timezone(BOT_SETTINGS.get("timezone", "UTC"))
 CHECK_INTERVAL = BOT_SETTINGS.get("check_interval_seconds", 60)
 SYMBOLS = BOT_SETTINGS.get("symbols", ["XRPUSD"])
 
+# Para evitar notificaciones duplicadas
+notified_tx_ids = set()
+
 # Funciones auxiliares
 def save_config():
     global WHALES
@@ -33,6 +37,8 @@ def format_whales():
 # Comandos del bot
 async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(format_whales())
+    if not context.application.chat_id:
+        context.application.chat_id = update.effective_chat.id
 
 async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 2:
@@ -47,6 +53,8 @@ async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     WHALES.append({"address": address, "min_usd": min_usd})
     save_config()
     await update.message.reply_text(f"Ballena añadida: {address} → ${min_usd}")
+    if not context.application.chat_id:
+        context.application.chat_id = update.effective_chat.id
 
 async def remove_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
@@ -57,33 +65,70 @@ async def remove_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     WHALES = [w for w in WHALES if w["address"] != address]
     save_config()
     await update.message.reply_text(f"Ballena eliminada: {address}")
+    if not context.application.chat_id:
+        context.application.chat_id = update.effective_chat.id
 
-# Función principal para revisar ballenas (simulada)
+# Función para revisar transacciones de ballenas en XRP Ledger
 async def check_whales(app):
+    if not app.chat_id:
+        return  # No hay chat asignado aún
+
     for whale in WHALES:
-        # Aquí podrías conectar a API real para detectar transacciones
-        # Ejemplo simulado de notificación
-        await app.bot.send_message(
-            chat_id=app.chat_id, 
-            text=f"Ballena {whale['address']} ha realizado una acción: ⬆️ Compra simulada de ${whale['min_usd']}"
-        )
+        address = whale["address"]
+        min_usd = whale["min_usd"]
+
+        # Llamada a la API pública de XRP Ledger para transacciones recientes
+        try:
+            response = requests.get(f"https://data.ripple.com/v2/accounts/{address}/transactions?limit=5")
+            data = response.json()
+        except Exception as e:
+            print(f"Error consultando XRP Ledger: {e}")
+            continue
+
+        for tx in data.get("transactions", []):
+            tx_id = tx.get("tx", {}).get("hash")
+            if not tx_id or tx_id in notified_tx_ids:
+                continue  # Ya notificado o no tiene hash
+
+            meta = tx.get("meta", {})
+            tx_type = tx.get("tx", {}).get("TransactionType", "")
+            amount = tx.get("tx", {}).get("Amount", 0)
+            if isinstance(amount, dict):
+                amount_val = float(amount.get("value", 0))
+                currency = amount.get("currency", "")
+            else:
+                amount_val = float(amount) / 1_000_000
+                currency = "XRP"
+
+            if amount_val < min_usd:
+                continue
+
+            if tx_type == "Payment":
+                direction = tx["tx"].get("Destination") == address
+                emoji = "⬆️" if direction else "⬇️"
+                action = "Compra" if direction else "Venta"
+                text = f"{emoji} {action} de {amount_val} {currency} por {address}"
+            elif tx_type in ["TrustSet", "OfferCreate", "OfferCancel"]:
+                emoji = "💸"
+                text = f"{emoji} Transacción de {address}: {tx_type} {amount_val} {currency}"
+            else:
+                continue
+
+            await app.bot.send_message(chat_id=app.chat_id, text=text)
+            notified_tx_ids.add(tx_id)  # Marcar como notificado
 
 # Configuración del bot
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Comandos
     app.add_handler(CommandHandler("ballenas", list_whales))
     app.add_handler(CommandHandler("add_ballena", add_whale))
     app.add_handler(CommandHandler("remove_ballena", remove_whale))
 
-    # Chat_id donde enviar notificaciones automáticas
-    # Para pruebas, se puede asignar manualmente el primer chat que envíe un comando
     app.chat_id = None
 
-    # Scheduler para revisiones periódicas
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(lambda: check_whales(app), "interval", seconds=CHECK_INTERVAL)
+    scheduler.add_job(lambda: asyncio.create_task(check_whales(app)), "interval", seconds=CHECK_INTERVAL)
     scheduler.start()
 
     print("Bot iniciado...")
