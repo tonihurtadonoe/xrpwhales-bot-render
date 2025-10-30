@@ -1,9 +1,9 @@
 import os
 import asyncio
 import json
+import pytz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import pytz  # <-- Import necesario para APScheduler
 
 # ======== VARIABLES DE ENTORNO ========
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -97,7 +97,6 @@ async def set_min(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ======== EJEMPLO DE NOTIFICACIONES DE TRADING ========
 async def trade_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Esto sería tu lógica real de monitorización
     await context.bot.send_message(
         chat_id=CHANNEL_ID,
         text=(
@@ -111,8 +110,9 @@ async def trade_notification(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # ===== CORRECCIÓN APSCHEDULER =====
-    app.job_queue._scheduler.configure(timezone=pytz.utc)
+    # ======== Forzar timezone de pytz para Render ========
+    import pytz
+    app.job_queue._scheduler.configure(timezone=pytz.UTC)  # Cambia UTC por tu zona si quieres
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ballenas", list_whales))
