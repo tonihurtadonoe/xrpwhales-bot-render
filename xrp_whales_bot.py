@@ -7,7 +7,8 @@ import os
 import time
 import logging
 import pytz
-from telegram import Update, ParseMode
+from telegram import Update
+from telegram.constants import ParseMode  # ✅ Corregido
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
 
@@ -72,9 +73,9 @@ def on_message(ws, msg, app):
         tx = data.get("transaction") or {}
         if tx.get("TransactionType") != "Payment":
             return
-        amount_xrp = int(tx["Amount"])/1_000_000
+        amount_xrp = int(tx["Amount"]) / 1_000_000
         price = get_xrp_price_usd()
-        if not price or amount_xrp*price < USD_THRESHOLD:
+        if not price or amount_xrp * price < USD_THRESHOLD:
             return
         sender = tx.get("Account")
         receiver = tx.get("Destination")
@@ -82,15 +83,18 @@ def on_message(ws, msg, app):
         whales = load_whales()
         for w in whales:
             if sender == w["address"] or receiver == w["address"]:
-                direction = "💹 Compra" if receiver==w["address"] else "📉 Venta"
-                msg = f"{direction} {amount_xrp} XRP (~${amount_xrp*price:.0f})"
-                asyncio.create_task(send_alert(app, msg))
+                direction = "💹 Compra" if receiver == w["address"] else "📉 Venta"
+                msg_text = f"{direction} {amount_xrp} XRP (~${amount_xrp*price:.0f})"
+                asyncio.create_task(send_alert(app, msg_text))
     except:
         return
 
 def start_ws(app):
     while True:
-        ws = websocket.WebSocketApp("wss://s1.ripple.com", on_message=lambda ws,msg: on_message(ws,msg,app))
+        ws = websocket.WebSocketApp(
+            "wss://s1.ripple.com", 
+            on_message=lambda ws, msg: on_message(ws, msg, app)
+        )
         ws.run_forever()
         time.sleep(5)
 
