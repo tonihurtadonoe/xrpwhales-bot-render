@@ -1,152 +1,66 @@
-import json
 import asyncio
-import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
-from datetime import datetime
-import pytz
-import json
-import asyncio
-import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from datetime import datetime
 import pytz
 
-# ----------------------------
-# Cargar configuración
-# ----------------------------
-with open("config.json", "r") as f:
-    config = json.load(f)
+# ⚙ Configuración
+BOT_TOKEN = "TU_BOT_TOKEN_AQUI"
+CHECK_INTERVAL = 60  # en segundos
+TIMEZONE = "America/New_York"
 
-BOT_TOKEN = config["bot_token"]
-BOT_SETTINGS = config.get("bot_settings", {})
-WHALES = config.get("whales", [])
+# Lista de ballenas (ejemplo)
+whales = []
 
-TIMEZONE = pytz.timezone(BOT_SETTINGS.get("timezone", "UTC"))
-CHECK_INTERVAL = BOT_SETTINGS.get("check_interval_seconds", 60)
-SYMBOLS = BOT_SETTINGS.get("symbols", ["XRPUSD"])
-
-# Para evitar notificaciones duplicadas
-notified_tx_ids = set()
-
-# ----------------------------
-# Funciones auxiliares
-# ----------------------------
-def save_config():
-    global WHALES
-    config["whales"] = WHALES
-    with open("config.json", "w") as f:
-        json.dump(config, f, indent=2)
-
-def format_whales():
-    if not WHALES:
-        return "❌ No hay ballenas registradas."
-    return "🐋 Ballenas registradas:\n" + "\n".join([f"• {w['address']} → ${w['min_usd']}" for w in WHALES])
-
-# ----------------------------
-# Comandos del bot
-# ----------------------------
+# Funciones de comandos
 async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(format_whales())
-    if not context.application.chat_id:
-        context.application.chat_id = update.effective_chat.id
+    if not whales:
+        await update.message.reply_text("🐋 No hay ballenas registradas.")
+    else:
+        msg = "🐳 Lista de ballenas:\n" + "\n".join(f"• {w}" for w in whales)
+        await update.message.reply_text(msg)
 
 async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 2:
-        await update.message.reply_text("Uso: /add_ballena <address> <min_usd>")
-        return
-    address, min_usd = context.args
-    try:
-        min_usd = float(min_usd)
-    except ValueError:
-        await update.message.reply_text("❌ min_usd debe ser un número.")
-        return
-    WHALES.append({"address": address, "min_usd": min_usd})
-    save_config()
-    await update.message.reply_text(f"✅ Ballena añadida:\n🐋 {address} → ${min_usd}")
-    if not context.application.chat_id:
-        context.application.chat_id = update.effective_chat.id
+    if context.args:
+        whale = " ".join(context.args)
+        whales.append(whale)
+        await update.message.reply_text(f"✅ Ballena agregada: {whale}")
+    else:
+        await update.message.reply_text("⚠️ Usa /add_ballena <nombre>")
 
 async def remove_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Uso: /remove_ballena <address>")
-        return
-    address = context.args[0]
-    global WHALES
-    WHALES = [w for w in WHALES if w["address"] != address]
-    save_config()
-    await update.message.reply_text(f"❌ Ballena eliminada:\n🐋 {address}")
-    if not context.application.chat_id:
-        context.application.chat_id = update.effective_chat.id
+    if context.args:
+        whale = " ".join(context.args)
+        if whale in whales:
+            whales.remove(whale)
+            await update.message.reply_text(f"🗑️ Ballena removida: {whale}")
+        else:
+            await update.message.reply_text(f"❌ Ballena no encontrada: {whale}")
+    else:
+        await update.message.reply_text("⚠️ Usa /remove_whale <nombre>")
 
-# ----------------------------
-# Función para revisar transacciones de ballenas
-# ----------------------------
+# Función de chequeo periódico (simulación)
 async def check_whales(app):
-    if not app.chat_id:
-        return  # No hay chat asignado aún
+    if whales:
+        for whale in whales:
+            # Aquí pondrías la lógica real de monitoreo
+            print(f"👀 Revisando ballena: {whale}")
+            # Opcional: enviar mensaje a Telegram
+            # await app.bot.send_message(chat_id=app.chat_id, text=f"🐋 Ballena activa: {whale}")
 
-    for whale in WHALES:
-        address = whale["address"]
-        min_usd = whale["min_usd"]
-
-        # Llamada a la API pública de XRP Ledger
-        try:
-            response = requests.get(f"https://data.ripple.com/v2/accounts/{address}/transactions?limit=5")
-            data = response.json()
-        except Exception as e:
-            print(f"Error consultando XRP Ledger: {e}")
-            continue
-
-        for tx in data.get("transactions", []):
-            tx_id = tx.get("tx", {}).get("hash")
-            if not tx_id or tx_id in notified_tx_ids:
-                continue
-
-            meta = tx.get("meta", {})
-            tx_type = tx.get("tx", {}).get("TransactionType", "")
-            amount = tx.get("tx", {}).get("Amount", 0)
-            if isinstance(amount, dict):
-                amount_val = float(amount.get("value", 0))
-                currency = amount.get("currency", "")
-            else:
-                amount_val = float(amount) / 1_000_000
-                currency = "XRP"
-
-            if amount_val < min_usd:
-                continue
-
-            if tx_type == "Payment":
-                direction = tx["tx"].get("Destination") == address
-                emoji = "⬆️" if direction else "⬇️"
-                action = "💰 Compra" if direction else "💸 Venta"
-                text = f"{emoji} {action} de {amount_val:.2f} {currency}\n🐋 {address}"
-            elif tx_type in ["TrustSet", "OfferCreate", "OfferCancel"]:
-                emoji = "⚡"
-                text = f"{emoji} Transacción especial de {address}:\n{tx_type} {amount_val:.2f} {currency}"
-            else:
-                continue
-
-            timestamp = tx.get("tx", {}).get("date")  # si quieres, se puede formatear
-            await app.bot.send_message(chat_id=app.chat_id, text=text)
-            notified_tx_ids.add(tx_id)
-
-# ----------------------------
-# Configuración del bot
-# ----------------------------
+# Main
 async def main():
+    # Crear bot
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.chat_id = None  # opcional, si quieres enviar mensajes automáticos a un chat específico
 
+    # Agregar handlers
     app.add_handler(CommandHandler("ballenas", list_whales))
     app.add_handler(CommandHandler("add_ballena", add_whale))
     app.add_handler(CommandHandler("remove_whale", remove_whale))
 
-    app.chat_id = None
-
-    # Scheduler para revisar ballenas
-    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+    # Scheduler externo con pytz
+    scheduler = AsyncIOScheduler(timezone=pytz.timezone(TIMEZONE))
     scheduler.add_job(lambda: asyncio.create_task(check_whales(app)), "interval", seconds=CHECK_INTERVAL)
     scheduler.start()
 
@@ -155,155 +69,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# -------------------------------
-# Cargar configuración
-# -------------------------------
-with open("config.json", "r") as f:
-    config = json.load(f)
-
-BOT_TOKEN = config["bot_token"]
-BOT_SETTINGS = config.get("bot_settings", {})
-WHALES = config.get("whales", [])
-
-TIMEZONE_NAME = BOT_SETTINGS.get("timezone", "UTC")
-TIMEZONE = pytz.timezone(TIMEZONE_NAME)
-CHECK_INTERVAL = BOT_SETTINGS.get("check_interval_seconds", 60)
-SYMBOLS = BOT_SETTINGS.get("symbols", ["XRPUSD"])
-
-# Para evitar notificaciones duplicadas
-notified_tx_ids = set()
-
-# -------------------------------
-# Funciones auxiliares
-# -------------------------------
-def save_config():
-    global WHALES
-    config["whales"] = WHALES
-    with open("config.json", "w") as f:
-        json.dump(config, f, indent=2)
-
-def format_whales():
-    if not WHALES:
-        return "No hay ballenas registradas."
-    return "\n".join([f"{w['address']} → ${w['min_usd']}" for w in WHALES])
-
-# -------------------------------
-# Comandos del bot
-# -------------------------------
-async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(format_whales())
-    if not context.application.chat_id:
-        context.application.chat_id = update.effective_chat.id
-
-async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 2:
-        await update.message.reply_text("Uso: /add_ballena <address> <min_usd>")
-        return
-    address, min_usd = context.args
-    try:
-        min_usd = float(min_usd)
-    except ValueError:
-        await update.message.reply_text("min_usd debe ser un número.")
-        return
-    WHALES.append({"address": address, "min_usd": min_usd})
-    save_config()
-    await update.message.reply_text(f"Ballena añadida: {address} → ${min_usd}")
-    if not context.application.chat_id:
-        context.application.chat_id = update.effective_chat.id
-
-async def remove_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Uso: /remove_ballena <address>")
-        return
-    address = context.args[0]
-    global WHALES
-    WHALES = [w for w in WHALES if w["address"] != address]
-    save_config()
-    await update.message.reply_text(f"Ballena eliminada: {address}")
-    if not context.application.chat_id:
-        context.application.chat_id = update.effective_chat.id
-
-# -------------------------------
-# Función para revisar transacciones de ballenas
-# -------------------------------
-async def check_whales(app):
-    if not app.chat_id:
-        return  # No hay chat asignado aún
-
-    for whale in WHALES:
-        address = whale["address"]
-        min_usd = whale["min_usd"]
-
-        try:
-            response = requests.get(
-                f"https://data.ripple.com/v2/accounts/{address}/transactions?limit=5"
-            )
-            data = response.json()
-        except Exception as e:
-            print(f"Error consultando XRP Ledger: {e}")
-            continue
-
-        for tx in data.get("transactions", []):
-            tx_id = tx.get("tx", {}).get("hash")
-            if not tx_id or tx_id in notified_tx_ids:
-                continue
-
-            meta = tx.get("meta", {})
-            tx_type = tx.get("tx", {}).get("TransactionType", "")
-            amount = tx.get("tx", {}).get("Amount", 0)
-            if isinstance(amount, dict):
-                amount_val = float(amount.get("value", 0))
-                currency = amount.get("currency", "")
-            else:
-                amount_val = float(amount) / 1_000_000
-                currency = "XRP"
-
-            if amount_val < min_usd:
-                continue
-
-            if tx_type == "Payment":
-                direction = tx["tx"].get("Destination") == address
-                emoji = "⬆️" if direction else "⬇️"
-                action = "Compra" if direction else "Venta"
-                text = f"{emoji} {action} de {amount_val} {currency} por {address}"
-            elif tx_type in ["TrustSet", "OfferCreate", "OfferCancel"]:
-                emoji = "💸"
-                text = f"{emoji} Transacción de {address}: {tx_type} {amount_val} {currency}"
-            else:
-                continue
-
-            await app.bot.send_message(chat_id=app.chat_id, text=text)
-            notified_tx_ids.add(tx_id)
-
-# -------------------------------
-# Configuración y arranque del bot
-# -------------------------------
-async def main():
-    # Crear la JobQueue explícitamente con timezone pytz
-    job_queue = JobQueue(timezone=TIMEZONE)
-    job_queue.start()
-
-    # Crear el bot con la JobQueue
-    app = ApplicationBuilder().token(BOT_TOKEN).job_queue(job_queue).build()
-
-    # Handlers de comandos
-    app.add_handler(CommandHandler("ballenas", list_whales))
-    app.add_handler(CommandHandler("add_ballena", add_whale))
-    app.add_handler(CommandHandler("remove_ballena", remove_whale))
-
-    # Chat ID inicial
-    app.chat_id = None
-
-    # Añadir nuestro job de chequeo de ballenas
-    app.job_queue.run_repeating(
-        lambda ctx: asyncio.create_task(check_whales(app)),
-        interval=CHECK_INTERVAL
-    )
-
-    print("Bot iniciado...")
-    await app.run_polling()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
