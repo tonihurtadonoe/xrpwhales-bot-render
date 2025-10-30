@@ -14,9 +14,12 @@ from telegram import Update, ParseMode
 from telegram.ext import Updater, CommandHandler, CallbackContext
 
 import os
+from telegram import Bot
 
-token = os.environ.get("TOKEN")
-print("Token recibido:", repr(token))
+TOKEN = os.environ.get("TOKEN")  # O pon directamente tu token aquí
+bot = Bot(token=TOKEN)
+print("Nombre del bot:", bot.get_me().username)
+
 
 
 # ===== CONFIG =====
@@ -237,5 +240,6 @@ if __name__ == "__main__":
     logging.info("Bot iniciado con límite: $%s", USD_THRESHOLD)
     updater.start_polling()
     updater.idle()
+
 
 
