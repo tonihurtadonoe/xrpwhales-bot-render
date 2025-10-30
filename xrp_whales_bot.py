@@ -1,102 +1,97 @@
 import asyncio
-import pytz
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-    JobQueue,
+    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import pytz
 
-# --- CONFIGURACIÓN ---
+# ----------------------
+# CONFIGURACIÓN DEL BOT
+# ----------------------
 BOT_TOKEN = "TU_BOT_TOKEN_AQUI"
-whales = {}  # Diccionario de ballenas {nombre: limite_transaccion}
+OWNER_ID = 123456789  # Tu ID de Telegram para /add /del /limit
 
-# --- HANDLERS ---
+# Lista de ballenas de ejemplo
+ballenas = [
+    {"nombre": "Whale1", "ultimo_mov": "Compra ⬆️🟢 5000 XRP"},
+    {"nombre": "Whale2", "ultimo_mov": "Venta ⬇️🔴 2000 XRP"},
+    {"nombre": "Whale3", "ultimo_mov": "Envio 💸 1000 XRP"},
+]
 
+# ----------------------
+# HANDLERS
+# ----------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "¡Hola! 🤖 Bienvenido al bot de seguimiento de XRP Whales.\n"
-        "Escribe 'ballenas' para ver la lista de todas las ballenas."
+        "👋 ¡Bienvenido al bot de alertas de ballenas XRP!\n"
+        'Escribe "ballenas" para ver la lista completa de ballenas y sus movimientos.'
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
     
     if text in ["hola", "hi"]:
-        await update.message.reply_text(
-            "¡Hola! 🤖 Bienvenido al bot de seguimiento de XRP Whales.\n"
-            "Escribe 'ballenas' para ver la lista de todas las ballenas."
-        )
+        await start(update, context)
+    
     elif text == "ballenas":
-        if whales:
-            message = "Lista de ballenas:\n"
-            for nombre, limite in whales.items():
-                message += f"- {nombre}: límite de {limite} XRP\n"
-            await update.message.reply_text(message)
-        else:
-            await update.message.reply_text("No hay ballenas registradas aún.")
-    else:
-        await update.message.reply_text("Comando no reconocido. Usa 'hola' o 'ballenas'.")
+        msg = "🐋 Lista de Ballenas:\n\n"
+        for whale in ballenas:
+            msg += f"{whale['nombre']}: {whale['ultimo_mov']}\n"
+        await update.message.reply_text(msg)
+    
+    # Puedes añadir más respuestas aquí si quieres
 
+# Comandos privados solo para ti
 async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != OWNER_ID:
+        return
     try:
         nombre = context.args[0]
-        limite = float(context.args[1])
-        whales[nombre] = limite
-        await update.message.reply_text(f"✅ Ballena '{nombre}' añadida con límite {limite} XRP.")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Uso: /add <nombre> <límite>")
+        mov = " ".join(context.args[1:])
+        ballenas.append({"nombre": nombre, "ultimo_mov": mov})
+        await update.message.reply_text(f"Ballena {nombre} añadida ✅")
+    except Exception:
+        await update.message.reply_text("Uso: /add <nombre> <movimiento>")
 
 async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != OWNER_ID:
+        return
     try:
         nombre = context.args[0]
-        if nombre in whales:
-            del whales[nombre]
-            await update.message.reply_text(f"❌ Ballena '{nombre}' eliminada.")
-        else:
-            await update.message.reply_text("La ballena no existe.")
-    except IndexError:
+        global ballenas
+        ballenas = [w for w in ballenas if w['nombre'] != nombre]
+        await update.message.reply_text(f"Ballena {nombre} eliminada ✅")
+    except Exception:
         await update.message.reply_text("Uso: /del <nombre>")
 
 async def set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != OWNER_ID:
+        return
     try:
-        nombre = context.args[0]
-        limite = float(context.args[1])
-        if nombre in whales:
-            whales[nombre] = limite
-            await update.message.reply_text(f"⚡ Límite de '{nombre}' actualizado a {limite} XRP.")
-        else:
-            await update.message.reply_text("La ballena no existe.")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Uso: /limit <nombre> <nuevo_limite>")
+        limit = float(context.args[0])
+        # Aquí guardas tu límite
+        await update.message.reply_text(f"Límite actualizado a {limit} XRP ✅")
+    except Exception:
+        await update.message.reply_text("Uso: /limit <valor>")
 
-# --- MAIN ---
-
+# ----------------------
+# MAIN
+# ----------------------
 async def main():
-    # Crear scheduler con pytz
-    scheduler = AsyncIOScheduler(timezone=pytz.timezone("America/New_York"))
+    # Scheduler con pytz para evitar errores de timezone
+    scheduler = AsyncIOScheduler(timezone=pytz.UTC)
     scheduler.start()
-
-    # Crear JobQueue con ese scheduler
-    job_queue = JobQueue()
-    job_queue.scheduler = scheduler
-    job_queue.start()
-
-    # Crear aplicación pasando nuestro JobQueue
-    app = ApplicationBuilder().token(BOT_TOKEN).job_queue(job_queue).build()
-
-    # Añadir handlers
-    app.add_handler(CommandHandler("start", start))
+    
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Handlers
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensaje))
     app.add_handler(CommandHandler("add", add_whale))
     app.add_handler(CommandHandler("del", del_whale))
     app.add_handler(CommandHandler("limit", set_limit))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Ejecutar bot
+    
+    # Start polling
     await app.run_polling()
 
 if __name__ == "__main__":
