@@ -74,61 +74,57 @@ def on_message(ws, msg, app):
         tx = data.get("transaction") or {}
         if tx.get("TransactionType") != "Payment":
             return
-        amount_xrp = int(tx["Amount"])/1_000_000
+        amount_xrp = int(tx["Amount"]) / 1_000_000
         price = get_xrp_price_usd()
-        if not price or amount_xrp*price < USD_THRESHOLD:
+        if not price or amount_xrp * price < USD_THRESHOLD:
             return
         sender = tx.get("Account")
         receiver = tx.get("Destination")
-        tx_hash = tx.get("hash")
         whales = load_whales()
         for w in whales:
             if sender == w["address"] or receiver == w["address"]:
-                direction = "💹 Compra" if receiver==w["address"] else "📉 Venta"
-                msg = f"{direction} {amount_xrp} XRP (~${amount_xrp*price:.0f})"
-                asyncio.create_task(send_alert(app, msg))
-    except:
-        return
+                direction = "💹 Compra" if receiver == w["address"] else "📉 Venta"
+                msg = f"{direction} {amount_xrp:.0f} XRP (~${amount_xrp * price:,.0f})"
+                asyncio.run_coroutine_threadsafe(send_alert(app, msg), app.loop)
+    except Exception as e:
+        logging.error(f"Error en on_message: {e}")
 
 def start_ws(app):
     while True:
-        ws = websocket.WebSocketApp("wss://s1.ripple.com", on_message=lambda ws,msg: on_message(ws,msg,app))
-        ws.run_forever()
+        try:
+            ws = websocket.WebSocketApp(
+                "wss://s1.ripple.com",
+                on_message=lambda ws, msg: on_message(ws, msg, app)
+            )
+            ws.run_forever()
+        except Exception as e:
+            logging.warning(f"WebSocket reiniciado: {e}")
         time.sleep(5)
 
 # FLASK
 app_flask = Flask(__name__)
+
 @app_flask.route("/")
 def home():
-    return "✅ Bot activo"
+    return "✅ Bot XRP Whales activo en Render"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port)
 
 # MAIN
 async def main():
-    # Creamos un scheduler con pytz
     scheduler = AsyncIOScheduler(timezone=pytz.utc)
-
-    # Creamos la app de Telegram
-    application = ApplicationBuilder().token(TOKEN).build()
-    application.job_queue.scheduler = scheduler
-
-    # Comandos
-    application.add_handler(CommandHandler("start", start))
-
-    # Iniciamos websocket en hilo aparte
-    threading.Thread(target=lambda: start_ws(application), daemon=True).start()
-
-    # Iniciamos Flask en hilo aparte
-    port = int(os.environ.get("PORT", 10000))
-    threading.Thread(target=lambda: app_flask.run(host="0.0.0.0", port=port), daemon=True).start()
-
-    # Arrancamos scheduler
     scheduler.start()
 
-    # Arrancamos bot
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.idle()
+    application = ApplicationBuilder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+
+    threading.Thread(target=lambda: start_ws(application), daemon=True).start()
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    # run_polling() maneja start, idle y polling correctamente
+    await application.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
