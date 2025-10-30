@@ -1,16 +1,14 @@
 import asyncio
 import json
 import requests
-import threading
-import websocket
 import os
-import time
 import logging
 import pytz
 from telegram import Update
-from telegram.constants import ParseMode  # ✅ Corregido
+from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
+from websockets import connect
 
 # CONFIG
 logging.basicConfig(level=logging.INFO)
@@ -61,42 +59,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Bot activo. Límite: ${USD_THRESHOLD:,.0f}")
 
 # XRP API
-def get_xrp_price_usd():
+async def get_xrp_price_usd():
     try:
-        return float(requests.get("https://api.coincap.io/v2/assets/ripple").json()["data"]["priceUsd"])
+        async with asyncio.to_thread(requests.get, "https://api.coincap.io/v2/assets/ripple") as response:
+            data = response.json()
+            return float(data["data"]["priceUsd"])
     except:
         return None
 
-def on_message(ws, msg, app):
-    try:
-        data = json.loads(msg)
-        tx = data.get("transaction") or {}
-        if tx.get("TransactionType") != "Payment":
-            return
-        amount_xrp = int(tx["Amount"]) / 1_000_000
-        price = get_xrp_price_usd()
-        if not price or amount_xrp * price < USD_THRESHOLD:
-            return
-        sender = tx.get("Account")
-        receiver = tx.get("Destination")
-        tx_hash = tx.get("hash")
-        whales = load_whales()
-        for w in whales:
-            if sender == w["address"] or receiver == w["address"]:
-                direction = "💹 Compra" if receiver == w["address"] else "📉 Venta"
-                msg_text = f"{direction} {amount_xrp} XRP (~${amount_xrp*price:.0f})"
-                asyncio.create_task(send_alert(app, msg_text))
-    except:
+async def handle_transaction(tx, app):
+    if tx.get("TransactionType") != "Payment":
         return
+    amount_xrp = int(tx["Amount"]) / 1_000_000
+    price = await get_xrp_price_usd()
+    if not price or amount_xrp * price < USD_THRESHOLD:
+        return
+    sender = tx.get("Account")
+    receiver = tx.get("Destination")
+    whales = load_whales()
+    for w in whales:
+        if sender == w["address"] or receiver == w["address"]:
+            direction = "💹 Compra" if receiver == w["address"] else "📉 Venta"
+            msg_text = f"{direction} {amount_xrp} XRP (~${amount_xrp*price:.0f})"
+            await send_alert(app, msg_text)
 
-def start_ws(app):
+async def xrp_ws_listener(app):
+    url = "wss://s1.ripple.com"
     while True:
-        ws = websocket.WebSocketApp(
-            "wss://s1.ripple.com", 
-            on_message=lambda ws, msg: on_message(ws, msg, app)
-        )
-        ws.run_forever()
-        time.sleep(5)
+        try:
+            async with connect(url) as websocket:
+                async for message in websocket:
+                    try:
+                        data = json.loads(message)
+                        tx = data.get("transaction") or {}
+                        await handle_transaction(tx, app)
+                    except:
+                        continue
+        except Exception as e:
+            logging.warning(f"WebSocket error: {e}, reconectando en 5s...")
+            await asyncio.sleep(5)
 
 # FLASK
 app_flask = Flask(__name__)
@@ -104,16 +105,25 @@ app_flask = Flask(__name__)
 def home():
     return "✅ Bot activo"
 
+async def run_flask():
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    config = Config()
+    config.bind = [f"0.0.0.0:{int(os.environ.get('PORT', 10000))}"]
+    await serve(app_flask, config)
+
 # MAIN
 async def main():
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
-    threading.Thread(target=lambda: start_ws(application), daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    threading.Thread(target=lambda: app_flask.run(host="0.0.0.0", port=port), daemon=True).start()
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.idle()
+
+    # Inicia WebSocket y Flask en paralelo con asyncio
+    await asyncio.gather(
+        application.start(),
+        application.updater.start_polling(),
+        xrp_ws_listener(application),
+        run_flask()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
