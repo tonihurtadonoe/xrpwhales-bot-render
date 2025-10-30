@@ -2,12 +2,13 @@ import json
 import asyncio
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
 from datetime import datetime
 import pytz
 
+# -------------------------------
 # Cargar configuración
+# -------------------------------
 with open("config.json", "r") as f:
     config = json.load(f)
 
@@ -15,14 +16,17 @@ BOT_TOKEN = config["bot_token"]
 BOT_SETTINGS = config.get("bot_settings", {})
 WHALES = config.get("whales", [])
 
+TIMEZONE_NAME = BOT_SETTINGS.get("timezone", "UTC")
+TIMEZONE = pytz.timezone(TIMEZONE_NAME)
 CHECK_INTERVAL = BOT_SETTINGS.get("check_interval_seconds", 60)
 SYMBOLS = BOT_SETTINGS.get("symbols", ["XRPUSD"])
-TIMEZONE_NAME = BOT_SETTINGS.get("timezone", "UTC")
 
 # Para evitar notificaciones duplicadas
 notified_tx_ids = set()
 
+# -------------------------------
 # Funciones auxiliares
+# -------------------------------
 def save_config():
     global WHALES
     config["whales"] = WHALES
@@ -34,7 +38,9 @@ def format_whales():
         return "No hay ballenas registradas."
     return "\n".join([f"{w['address']} → ${w['min_usd']}" for w in WHALES])
 
+# -------------------------------
 # Comandos del bot
+# -------------------------------
 async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(format_whales())
     if not context.application.chat_id:
@@ -68,7 +74,9 @@ async def remove_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.application.chat_id:
         context.application.chat_id = update.effective_chat.id
 
-# Función para revisar transacciones de ballenas en XRP Ledger
+# -------------------------------
+# Función para revisar transacciones de ballenas
+# -------------------------------
 async def check_whales(app):
     if not app.chat_id:
         return  # No hay chat asignado aún
@@ -77,9 +85,10 @@ async def check_whales(app):
         address = whale["address"]
         min_usd = whale["min_usd"]
 
-        # Llamada a la API pública de XRP Ledger para transacciones recientes
         try:
-            response = requests.get(f"https://data.ripple.com/v2/accounts/{address}/transactions?limit=5")
+            response = requests.get(
+                f"https://data.ripple.com/v2/accounts/{address}/transactions?limit=5"
+            )
             data = response.json()
         except Exception as e:
             print(f"Error consultando XRP Ledger: {e}")
@@ -88,7 +97,7 @@ async def check_whales(app):
         for tx in data.get("transactions", []):
             tx_id = tx.get("tx", {}).get("hash")
             if not tx_id or tx_id in notified_tx_ids:
-                continue  # Ya notificado o no tiene hash
+                continue
 
             meta = tx.get("meta", {})
             tx_type = tx.get("tx", {}).get("TransactionType", "")
@@ -115,22 +124,32 @@ async def check_whales(app):
                 continue
 
             await app.bot.send_message(chat_id=app.chat_id, text=text)
-            notified_tx_ids.add(tx_id)  # Marcar como notificado
+            notified_tx_ids.add(tx_id)
 
-# Configuración del bot
+# -------------------------------
+# Configuración y arranque del bot
+# -------------------------------
 async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Crear la JobQueue explícitamente con timezone pytz
+    job_queue = JobQueue(timezone=TIMEZONE)
+    job_queue.start()
 
+    # Crear el bot con la JobQueue
+    app = ApplicationBuilder().token(BOT_TOKEN).job_queue(job_queue).build()
+
+    # Handlers de comandos
     app.add_handler(CommandHandler("ballenas", list_whales))
     app.add_handler(CommandHandler("add_ballena", add_whale))
     app.add_handler(CommandHandler("remove_ballena", remove_whale))
 
+    # Chat ID inicial
     app.chat_id = None
 
-    # PASAMOS la zona horaria correctamente con pytz.timezone
-    scheduler = AsyncIOScheduler(timezone=pytz.timezone(TIMEZONE_NAME))
-    scheduler.add_job(lambda: asyncio.create_task(check_whales(app)), "interval", seconds=CHECK_INTERVAL)
-    scheduler.start()
+    # Añadir nuestro job de chequeo de ballenas
+    app.job_queue.run_repeating(
+        lambda ctx: asyncio.create_task(check_whales(app)),
+        interval=CHECK_INTERVAL
+    )
 
     print("Bot iniciado...")
     await app.run_polling()
