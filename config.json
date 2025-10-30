@@ -1,0 +1,10 @@
+{
+  "symbols": ["XRPUSD", "BTCUSD", "ETHUSD"],
+  "alert_limits": {
+    "whale_buy": 100000,
+    "whale_sell": 100000
+  },
+  "check_interval_seconds": 60,
+  "log_level": "INFO",
+  "timezone": "UTC"
+}
