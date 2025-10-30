@@ -1,112 +1,96 @@
 import json
 import asyncio
+import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+import pytz
 
-# Cargar config.json
+# Cargar configuración
 with open("config.json", "r") as f:
     config = json.load(f)
 
-BOT_TOKEN = config.get("bot_token")
-whales = config.get("whales", [])
+BOT_TOKEN = config["bot_token"]
+bot_settings = config.get("bot_settings", {})
+TIMEZONE = pytz.timezone(bot_settings.get("timezone", "UTC"))
+CHECK_INTERVAL = bot_settings.get("check_interval_seconds", 60)
 
-# Función para guardar whales en config.json
-def save_whales():
-    config["whales"] = whales
-    with open("config.json", "w") as f:
-        json.dump(config, f, indent=4)
+# Configurar logging
+log_level = getattr(logging, bot_settings.get("log_level", "INFO"))
+logging.basicConfig(level=log_level)
+logger = logging.getLogger(__name__)
+
+# Lista de whales
+whales = config.get("whales", [])
 
 # Comandos del bot
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hola! Soy tu bot de seguimiento de whales XRP. Escribe /help para ver comandos.")
+    await update.message.reply_text("Hola! 👋 Soy tu bot de XRP Whales. Usa /help para ver los comandos disponibles.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    commands = (
+    await update.message.reply_text(
         "Comandos disponibles:\n"
-        "/ballenas - Listar todas las whales\n"
-        "/add_whale <address> <min_usd> - Añadir una whale\n"
-        "/del_whale <address> - Borrar una whale\n"
-        "Responde 'hola' o 'hi' para un saludo!"
+        "/add <address> <min_usd> - Añadir una ballena\n"
+        "/remove <address> - Borrar una ballena\n"
+        "/ballenas - Listar todas las ballenas\n"
+        "El bot enviará notificaciones con estos emotis:\n"
+        "⬆️ Compra\n"
+        "⬇️ Venta\n"
+        "💸 Transferencia"
     )
-    await update.message.reply_text(commands)
-
-async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not whales:
-        await update.message.reply_text("No hay whales registradas.")
-        return
-    message = "Lista de whales:\n"
-    for w in whales:
-        message += f"- {w['address']} (mínimo USD {w['min_usd']})\n"
-    await update.message.reply_text(message)
 
 async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         address = context.args[0]
         min_usd = float(context.args[1])
+        whales.append({"address": address, "min_usd": min_usd})
+        await update.message.reply_text(f"Ballena añadida: {address} con mínimo ${min_usd}")
     except (IndexError, ValueError):
-        await update.message.reply_text("Uso: /add_whale <address> <min_usd>")
-        return
+        await update.message.reply_text("Uso: /add <address> <min_usd>")
 
-    # Verificar si ya existe
-    for w in whales:
-        if w["address"] == address:
-            await update.message.reply_text("La whale ya está registrada.")
-            return
-
-    whales.append({"address": address, "min_usd": min_usd})
-    save_whales()
-    await update.message.reply_text(f"Whale {address} añadida con mínimo USD {min_usd}.")
-
-async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remove_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         address = context.args[0]
+        global whales
+        whales = [w for w in whales if w["address"] != address]
+        await update.message.reply_text(f"Ballena eliminada: {address}")
     except IndexError:
-        await update.message.reply_text("Uso: /del_whale <address>")
+        await update.message.reply_text("Uso: /remove <address>")
+
+async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not whales:
+        await update.message.reply_text("No hay ballenas registradas.")
         return
-
+    msg = "Ballenas actuales:\n"
     for w in whales:
-        if w["address"] == address:
-            whales.remove(w)
-            save_whales()
-            await update.message.reply_text(f"Whale {address} eliminada.")
-            return
-    await update.message.reply_text("No se encontró la whale.")
+        msg += f"- {w['address']} mínimo ${w['min_usd']}\n"
+    await update.message.reply_text(msg)
 
-# Mensajes generales
-async def respond_greetings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-    if text in ["hola", "hi"]:
-        await update.message.reply_text("¡Hola! 👋")
+# Función simulada para detectar movimientos de whales (placeholder)
+async def check_whales():
+    # Aquí pondrías tu lógica real para chequear la blockchain
+    for whale in whales:
+        # Ejemplo de notificación simulada
+        print(f"Detectada actividad de {whale['address']}: ⬆️ Compra, ⬇️ Venta, 💸 Transferencia")
 
-# Función para reportar acción de whales
-async def report_action(address, action, usd_amount, context: ContextTypes.DEFAULT_TYPE):
-    emoji = ""
-    if action.lower() == "compra":
-        emoji = "⬆️"
-    elif action.lower() == "venta":
-        emoji = "⬇️"
-    elif action.lower() == "transferencia":
-        emoji = "💸"
-
-    message = f"{emoji} Whale {address} realizó {action} de ${usd_amount}"
-    # Para testing local, imprime. Cambiar a context.bot.send_message si quieres enviar al chat
-    print(message)
-
-# Main
 async def main():
+    # Crear aplicación de Telegram
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Comandos
+    # Agregar handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("add", add_whale))
+    app.add_handler(CommandHandler("remove", remove_whale))
     app.add_handler(CommandHandler("ballenas", list_whales))
-    app.add_handler(CommandHandler("add_whale", add_whale))
-    app.add_handler(CommandHandler("del_whale", del_whale))
 
-    # Mensajes generales
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, respond_greetings))
+    # Scheduler para chequeos periódicos
+    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+    scheduler.add_job(check_whales, IntervalTrigger(seconds=CHECK_INTERVAL))
+    scheduler.start()
 
-    print("Bot corriendo...")
+    # Ejecutar bot
     await app.run_polling()
 
 if __name__ == "__main__":
