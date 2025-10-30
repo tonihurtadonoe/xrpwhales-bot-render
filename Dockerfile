@@ -21,4 +21,5 @@ ENV PORT=10000
 EXPOSE 10000
 
 # Comando de inicio (ajústalo si tu archivo principal tiene otro nombre)
-CMD ["python", "main.py"]
+CMD ["python", "xrp_whales_bot.py"]
+
