@@ -1,25 +1,38 @@
-# Imagen base ligera de Python
+# -----------------------------
+# Base image: Python 3.11 slim
+# -----------------------------
 FROM python:3.11-slim
 
-# Establecer directorio de trabajo dentro del contenedor
+# -----------------------------
+# Set working directory
+# -----------------------------
 WORKDIR /app
 
-# Copiar los archivos necesarios
-COPY requirements.txt ./
-
-# Instalar dependencias
+# -----------------------------
+# Copy requirements and install
+# -----------------------------
+COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copiar el resto del código fuente
+# -----------------------------
+# Copy app code
+# -----------------------------
 COPY . .
 
-# Establecer variable de entorno para Flask
+# -----------------------------
+# Environment variables
+# -----------------------------
+# Puedes definir defaults si quieres
 ENV PORT=10000
+ENV CHECK_INTERVAL=60
 
-# Exponer el puerto que Render usará
+# -----------------------------
+# Expose port for Render
+# -----------------------------
 EXPOSE 10000
 
-# Comando de inicio (ajústalo si tu archivo principal tiene otro nombre)
+# -----------------------------
+# Run the bot
+# -----------------------------
 CMD ["python", "xrp_whales_bot.py"]
-
