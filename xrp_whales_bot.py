@@ -1,141 +1,125 @@
 import asyncio
-import logging
+import random
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import pytz
 
-# ------------------------------
-# Configuración
-# ------------------------------
-BOT_TOKEN = "TU_TOKEN_DE_TELEGRAM"
-CHANNEL_ID = "@TU_CANAL_O_GRUPO"  # o ID numérico del grupo
-ADMIN_IDS = [123456789]  # tu ID de Telegram para comandos privados
+# ----------------------------
+# CONFIG
+BOT_TOKEN = "TU_BOT_TOKEN"
+CHANNEL_ID = "@tu_canal"  # tu canal o grupo
+# ----------------------------
 
-# Lista de alertas
-whale_alerts = []
-
-# Mapeo de emojis
-emoji_map = {
-    "compra_largo": "⬆️",
-    "compra_corto": "⬇️",
-    "venta": "💸"
+# Lista de ballenas seguidas
+ballenas_seguidas = {
+    "Whale1": 500000,
+    "Whale2": 300000,
+    "Whale3": 1000000
 }
 
-# ------------------------------
-# Logging
-# ------------------------------
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Limite de alertas (opcional)
+alert_limit = 5
 
-# ------------------------------
-# Funciones
-# ------------------------------
+# ----------------------------
+# FUNCIONES DE ALERTA
+async def enviar_alerta(context: ContextTypes.DEFAULT_TYPE, tipo: str, nombre: str, cantidad: float):
+    emoji = ""
+    if tipo == "largo":
+        emoji = "⬆️"
+    elif tipo == "corto":
+        emoji = "⬇️"
+    elif tipo == "venta":
+        emoji = "💸"
 
-# Respuesta a "hola"
-async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text.lower()
-    if "hola" in user_text:
-        await update.message.reply_text(
-            "¡Hola! 👋\nPara ver las ballenas activas escribe: ballenas"
-        )
+    mensaje = f"{emoji} {nombre} - ${cantidad:,.2f}"
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=mensaje)
 
-# Mostrar lista de ballenas actuales
-async def show_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not whale_alerts:
-        await update.message.reply_text("No hay alertas activas 🐋")
+# Función simulada de alertas aleatorias
+async def alerta_simulada(context: ContextTypes.DEFAULT_TYPE):
+    if not ballenas_seguidas:
         return
+    nombre = random.choice(list(ballenas_seguidas.keys()))
+    cantidad = ballenas_seguidas[nombre]
+    tipo = random.choice(["largo", "corto", "venta"])
+    await enviar_alerta(context, tipo, nombre, cantidad)
 
-    text = "🐋 Ballenas que se están siguiendo 🐋\n\n"
-    for alert in whale_alerts:
-        emoji = emoji_map.get(alert["tipo"], "")
-        text += f"{emoji} {alert['nombre']} - ${alert['cantidad']:,}\n"
-    await update.message.reply_text(text)
-
-# Comandos solo para admins
-async def add_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    try:
-        nombre, tipo, cantidad = context.args
-        cantidad = int(cantidad)
-        whale_alerts.append({"nombre": nombre, "tipo": tipo, "cantidad": cantidad})
-        await update.message.reply_text(f"✅ Alerta añadida: {nombre} {tipo} ${cantidad}")
-        # Enviar automáticamente al canal
-        emoji = emoji_map.get(tipo, "")
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"🚨 Nueva alerta de ballena {emoji} {nombre} - ${cantidad:,}"
-        )
-    except Exception as e:
-        await update.message.reply_text("❌ Uso: /add nombre tipo cantidad")
-
-async def del_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return
+# ----------------------------
+# COMANDOS DE ADMIN
+async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         nombre = context.args[0]
-        global whale_alerts
-        whale_alerts = [w for w in whale_alerts if w["nombre"] != nombre]
-        await update.message.reply_text(f"🗑️ Alerta eliminada: {nombre}")
-    except Exception as e:
-        await update.message.reply_text("❌ Uso: /dell nombre")
+        cantidad = float(context.args[1])
+        ballenas_seguidas[nombre] = cantidad
+        await update.message.reply_text(f"✅ Ballena {nombre} agregada con ${cantidad:,.2f}")
+    except (IndexError, ValueError):
+        await update.message.reply_text("Uso: /add <nombre> <cantidad>")
 
-async def limit_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return
+async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        limite = int(context.args[0])
-        global whale_alerts
-        whale_alerts = whale_alerts[:limite]
-        await update.message.reply_text(f"⚡ Limite de alertas establecido en {limite}")
-    except Exception as e:
-        await update.message.reply_text("❌ Uso: /limit numero")
+        nombre = context.args[0]
+        if nombre in ballenas_seguidas:
+            del ballenas_seguidas[nombre]
+            await update.message.reply_text(f"❌ Ballena {nombre} eliminada")
+        else:
+            await update.message.reply_text(f"No existe la ballena {nombre}")
+    except IndexError:
+        await update.message.reply_text("Uso: /del <nombre>")
 
-# ------------------------------
-# Función de simulación de alertas automáticas
-# ------------------------------
-async def simulate_whale_alerts(app):
-    """
-    Simula nuevas alertas cada cierto tiempo.
-    En un bot real, aquí se conectaría a API de XRP Whales.
-    """
-    import random
-    tipos = ["compra_largo", "compra_corto", "venta"]
-    nombres = ["Whale1", "Whale2", "Whale3", "Whale4"]
+async def list_ballenas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if ballenas_seguidas:
+        lista = "\n".join([f"{nombre} - ${cantidad:,.2f}" for nombre, cantidad in ballenas_seguidas.items()])
+        await update.message.reply_text(f"Ballenas seguidas:\n{lista}")
+    else:
+        await update.message.reply_text("No hay ballenas en seguimiento.")
 
-    while True:
-        await asyncio.sleep(30)  # cada 30 segundos (modifica a tu gusto)
-        nombre = random.choice(nombres)
-        tipo = random.choice(tipos)
-        cantidad = random.randint(100000, 1000000)
-        whale_alerts.append({"nombre": nombre, "tipo": tipo, "cantidad": cantidad})
+async def limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global alert_limit
+    try:
+        alert_limit = int(context.args[0])
+        await update.message.reply_text(f"✅ Límite de alertas establecido a {alert_limit}")
+    except (IndexError, ValueError):
+        await update.message.reply_text("Uso: /limit <numero>")
 
-        emoji = emoji_map.get(tipo, "")
-        msg = f"🚨 Alerta de ballena {emoji} {nombre} - ${cantidad:,}"
-        await app.bot.send_message(chat_id=CHANNEL_ID, text=msg)
-        logger.info(f"Enviada alerta: {msg}")
+# ----------------------------
+# MENSAJES DE TEXTO
+async def mensajes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.lower()
+    if "hola" in texto:
+        await update.message.reply_text(
+            "¡Hola! 👋\nPara ver las ballenas que seguimos, escribe: ballenas"
+        )
+    elif "ballenas" in texto:
+        if ballenas_seguidas:
+            lista = "\n".join([f"{nombre} - ${cantidad:,.2f}" for nombre, cantidad in ballenas_seguidas.items()])
+            await update.message.reply_text(f"Ballenas seguidas:\n{lista}")
+        else:
+            await update.message.reply_text("No hay ballenas en seguimiento.")
 
-# ------------------------------
-# Main
-# ------------------------------
+# ----------------------------
+# FUNCION PRINCIPAL
 async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).job_queue_options(timezone=pytz.UTC).build()
 
-    # Mensajes normales
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), welcome))
-    app.add_handler(MessageHandler(filters.Regex(r"(?i)^ballenas$"), show_whales))
+    # Handlers de comandos
+    app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("del", delete))
+    app.add_handler(CommandHandler("list", list_ballenas))
+    app.add_handler(CommandHandler("limit", limit))
 
-    # Comandos admin
-    app.add_handler(CommandHandler("add", add_alert))
-    app.add_handler(CommandHandler("dell", del_alert))
-    app.add_handler(CommandHandler("limit", limit_alert))
+    # Handler de mensajes de texto
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), mensajes))
 
-    # Ejecutar simulación de alertas en segundo plano
-    app.job_queue.run_repeating(lambda ctx: asyncio.create_task(simulate_whale_alerts(app)), interval=30, first=10)
+    # Programar alertas simuladas cada 30 segundos
+    scheduler = AsyncIOScheduler(timezone=pytz.UTC)
+    scheduler.add_job(lambda: asyncio.create_task(alerta_simulada(app.job_queue._default_bot)), 'interval', seconds=30)
+    scheduler.start()
 
-    # Inicia bot
+    print("Bot activo...")
     await app.run_polling()
 
+# ----------------------------
 if __name__ == "__main__":
     asyncio.run(main())
