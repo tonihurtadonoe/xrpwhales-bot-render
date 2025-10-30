@@ -1,4 +1,5 @@
 {
+  "bot_token": "TU_TOKEN_DE_TELEGRAM_AQUI",
   "bot_settings": {
     "symbols": ["XRPUSD", "BTCUSD"],  
     "check_interval_seconds": 60,
