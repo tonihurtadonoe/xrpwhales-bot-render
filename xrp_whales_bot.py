@@ -7,7 +7,8 @@ import os
 import time
 import logging
 import pytz
-from telegram import Update, ParseMode
+from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -130,3 +131,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
