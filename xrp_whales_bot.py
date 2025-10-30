@@ -1,15 +1,14 @@
 import os
 import asyncio
+import json
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from pytz import timezone
+import pytz  # <-- Import necesario para APScheduler
 
 # ======== VARIABLES DE ENTORNO ========
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID")
-OWNER_ID = int(os.environ.get("OWNER_ID"))
-
+CHANNEL_ID = os.environ.get("CHANNEL_ID")  # Usar solo CHANNEL_ID
+OWNER_ID = int(os.environ.get("OWNER_ID"))  # Tu ID de Telegram
 EMOJI_BUY = os.environ.get("EMOJI_BUY", "🐋⬆️🟢")
 EMOJI_SELL = os.environ.get("EMOJI_SELL", "🐋⬇️🔴")
 EMOJI_SEND = os.environ.get("EMOJI_SEND", "🐋💸")
@@ -17,26 +16,22 @@ EMOJI_SEND = os.environ.get("EMOJI_SEND", "🐋💸")
 WELCOME_ES = "🐋 ¡Hola! Bienvenido al bot de XRP Whales."
 WELCOME_EN = "🐋 Hi! Welcome to the XRP Whales bot."
 
-# ======== CONFIGURACIÓN EN MEMORIA ========
-# Inicializamos whales y min_trans desde variables de entorno si existen
-whales = {}
-MIN_TRANS = float(os.environ.get("MIN_TRANS", 1000))
+CONFIG_FILE = "config.json"
 
-# ======== FUNCIONES PARA SIMULAR "PERSISTENCIA" ========
-def save_whales():
-    """Simula guardar whales en variable de entorno (en memoria)"""
-    os.environ["WHALES"] = str(whales)
+# ======== FUNCIONES DE CONFIG ========
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        return {"whales": {}, "min_trans": 1000}
+    with open(CONFIG_FILE, "r") as f:
+        return json.load(f)
 
-def load_whales():
-    """Carga whales desde variable de entorno (si existe)"""
-    global whales
-    env_whales = os.environ.get("WHALES")
-    if env_whales:
-        try:
-            # Convierte string de dict a dict
-            whales = eval(env_whales)
-        except Exception:
-            whales = {}
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
+
+config = load_config()
+whales = config.get("whales", {})
+MIN_TRANS = config.get("min_trans", 1000)
 
 # ======== COMANDOS ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -64,7 +59,8 @@ async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     name, address = context.args[0], context.args[1]
     whales[name] = address
-    save_whales()
+    config["whales"] = whales
+    save_config(config)
     await update.message.reply_text(f"Ballena añadida: {name} 🐋")
 
 async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -77,7 +73,8 @@ async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = context.args[0]
     if name in whales:
         del whales[name]
-        save_whales()
+        config["whales"] = whales
+        save_config(config)
         await update.message.reply_text(f"Ballena eliminada: {name} 🐋")
     else:
         await update.message.reply_text(f"No existe la ballena: {name} 🐋")
@@ -92,13 +89,15 @@ async def set_min(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         MIN_TRANS = float(context.args[0])
-        os.environ["MIN_TRANS"] = str(MIN_TRANS)
+        config["min_trans"] = MIN_TRANS
+        save_config(config)
         await update.message.reply_text(f"Límite mínimo actualizado a {MIN_TRANS} 🐋")
     except ValueError:
         await update.message.reply_text("Cantidad inválida 🐋.")
 
-# ======== NOTIFICACIONES DE TRADING ========
+# ======== EJEMPLO DE NOTIFICACIONES DE TRADING ========
 async def trade_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Esto sería tu lógica real de monitorización
     await context.bot.send_message(
         chat_id=CHANNEL_ID,
         text=(
@@ -110,24 +109,18 @@ async def trade_notification(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ======== MAIN ========
 async def main():
-    # Cargamos whales desde memoria
-    load_whales()
-
-    # Construimos la app
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Forzamos JobQueue con pytz para evitar errores en Render
-    app.job_queue.scheduler = AsyncIOScheduler(timezone=timezone("America/New_York"))
-
-    # Comandos
+    
+    # ===== CORRECCIÓN APSCHEDULER =====
+    app.job_queue._scheduler.configure(timezone=pytz.utc)
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ballenas", list_whales))
     app.add_handler(CommandHandler("addwhale", add_whale))
     app.add_handler(CommandHandler("delwhale", del_whale))
     app.add_handler(CommandHandler("setmin", set_min))
     app.add_handler(CommandHandler("trade", trade_notification))
-
-    # Ejecutamos polling
+    
     await app.run_polling()
 
 if __name__ == "__main__":
