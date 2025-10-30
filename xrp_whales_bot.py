@@ -20,9 +20,10 @@ logging.basicConfig(
     handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
 )
 
-# Leer variables de entorno correctas
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 USER_ID = os.environ.get("TELEGRAM_CHAT_ID")  # tu chat id
+WHALES_FILE = "whales.json"
+CONFIG_FILE = "config.json"
 
 if not TOKEN:
     logging.error("❌ TELEGRAM_TOKEN no encontrado en variables de entorno. Abortando.")
@@ -32,9 +33,6 @@ try:
     USER_ID = int(USER_ID)
 except Exception:
     logging.warning("⚠️ TELEGRAM_CHAT_ID no es numérico. Se mantendrá como string.")
-
-WHALES_FILE = "whales.json"
-CONFIG_FILE = "config.json"
 
 # ===== DEFAULTS =====
 DEFAULT_USD_THRESHOLD = 5_000_000.0
@@ -72,7 +70,12 @@ def authorized(update: Update):
 
 def send_alert(message: str):
     try:
-        updater.bot.send_message(chat_id=USER_ID, text=message, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        updater.bot.send_message(
+            chat_id=USER_ID,
+            text=message,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
     except Exception as e:
         logging.error(f"Error enviando mensaje: {e}")
 
@@ -201,11 +204,6 @@ def start_websocket():
             time.sleep(5)
 
 # ===== TELEGRAM + FLASK =====
-# Validación simple del token
-if len(TOKEN.split(":")) != 3:
-    logging.error("❌ TELEGRAM_TOKEN inválido. Verifica que sea el token correcto.")
-    raise SystemExit(1)
-
 updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
 dp.add_handler(CommandHandler("start", start))
