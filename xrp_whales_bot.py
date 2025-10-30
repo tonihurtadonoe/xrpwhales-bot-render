@@ -15,9 +15,9 @@ BOT_TOKEN = config["bot_token"]
 BOT_SETTINGS = config.get("bot_settings", {})
 WHALES = config.get("whales", [])
 
-TIMEZONE = pytz.timezone(BOT_SETTINGS.get("timezone", "UTC"))
 CHECK_INTERVAL = BOT_SETTINGS.get("check_interval_seconds", 60)
 SYMBOLS = BOT_SETTINGS.get("symbols", ["XRPUSD"])
+TIMEZONE_NAME = BOT_SETTINGS.get("timezone", "UTC")
 
 # Para evitar notificaciones duplicadas
 notified_tx_ids = set()
@@ -127,7 +127,8 @@ async def main():
 
     app.chat_id = None
 
-    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+    # PASAMOS la zona horaria correctamente con pytz.timezone
+    scheduler = AsyncIOScheduler(timezone=pytz.timezone(TIMEZONE_NAME))
     scheduler.add_job(lambda: asyncio.create_task(check_whales(app)), "interval", seconds=CHECK_INTERVAL)
     scheduler.start()
 
