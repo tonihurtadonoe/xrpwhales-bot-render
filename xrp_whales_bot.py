@@ -10,6 +10,12 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask
 from websockets import connect
 
+import pytz
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# Forzamos la zona horaria de APScheduler a una válida de pytz
+scheduler = AsyncIOScheduler(timezone=pytz.utc)
+
 # CONFIG
 logging.basicConfig(level=logging.INFO)
 
@@ -127,3 +133,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
