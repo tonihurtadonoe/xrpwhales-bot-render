@@ -1,5 +1,5 @@
 import asyncio
-import random
+import requests
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -11,40 +11,50 @@ import pytz
 # CONFIG
 BOT_TOKEN = "TU_BOT_TOKEN"
 CHANNEL_ID = "@tu_canal"  # tu canal o grupo
+WHALE_ALERT_API_KEY = "TU_API_KEY"  # clave de la API real
 # ----------------------------
 
-# Lista de ballenas seguidas
 ballenas_seguidas = {
     "Whale1": 500000,
     "Whale2": 300000,
     "Whale3": 1000000
 }
 
-# Limite de alertas (opcional)
 alert_limit = 5
+alert_count = 0
 
 # ----------------------------
 # FUNCIONES DE ALERTA
 async def enviar_alerta(context: ContextTypes.DEFAULT_TYPE, tipo: str, nombre: str, cantidad: float):
-    emoji = ""
-    if tipo == "largo":
-        emoji = "⬆️"
-    elif tipo == "corto":
-        emoji = "⬇️"
-    elif tipo == "venta":
-        emoji = "💸"
-
+    emoji = {"largo": "⬆️", "corto": "⬇️", "venta": "💸"}.get(tipo, "")
     mensaje = f"{emoji} {nombre} - ${cantidad:,.2f}"
     await context.bot.send_message(chat_id=CHANNEL_ID, text=mensaje)
 
-# Función simulada de alertas aleatorias
-async def alerta_simulada(context: ContextTypes.DEFAULT_TYPE):
-    if not ballenas_seguidas:
+def obtener_alertas_reales():
+    headers = {"Authorization": f"Bearer {WHALE_ALERT_API_KEY}"}
+    try:
+        response = requests.get("https://api.xrpwhales.com/alerts", headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Error al obtener alertas: {e}")
+        return []
+
+async def revisar_alertas(context: ContextTypes.DEFAULT_TYPE):
+    global alert_count
+    if alert_count >= alert_limit:
         return
-    nombre = random.choice(list(ballenas_seguidas.keys()))
-    cantidad = ballenas_seguidas[nombre]
-    tipo = random.choice(["largo", "corto", "venta"])
-    await enviar_alerta(context, tipo, nombre, cantidad)
+
+    alertas = obtener_alertas_reales()
+    for alerta in alertas:
+        nombre = alerta.get("name")
+        cantidad = alerta.get("amount")
+        tipo = alerta.get("type")
+        if nombre in ballenas_seguidas:
+            await enviar_alerta(context, tipo, nombre, cantidad)
+            alert_count += 1
+            if alert_count >= alert_limit:
+                break
 
 # ----------------------------
 # COMANDOS DE ADMIN
@@ -101,7 +111,7 @@ async def mensajes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------------------
 # FUNCION PRINCIPAL
 async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).job_queue_options(timezone=pytz.UTC).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Handlers de comandos
     app.add_handler(CommandHandler("add", add))
@@ -112,12 +122,12 @@ async def main():
     # Handler de mensajes de texto
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), mensajes))
 
-    # Programar alertas simuladas cada 30 segundos
+    # Programar revisión de alertas cada 30 segundos con pytz.UTC
     scheduler = AsyncIOScheduler(timezone=pytz.UTC)
-    scheduler.add_job(lambda: asyncio.create_task(alerta_simulada(app.job_queue._default_bot)), 'interval', seconds=30)
+    scheduler.add_job(lambda: asyncio.create_task(revisar_alertas(app.bot)), 'interval', seconds=30)
     scheduler.start()
 
-    print("Bot activo...")
+    print("Bot activo con alertas reales...")
     await app.run_polling()
 
 # ----------------------------
