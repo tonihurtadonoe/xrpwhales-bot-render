@@ -1,80 +1,105 @@
 import asyncio
 import logging
-import pytz
-import requests
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    CommandHandler,
-    JobQueue
-)
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
 # ------------------------------
-# CONFIGURACIÓN (PON TUS DATOS AQUÍ)
+# Configuración
 # ------------------------------
-BOT_TOKEN = "TU_BOT_TOKEN"
-CHANNEL_ID = "@tu_canal_o_id"
-WHALE_ALERT_API_KEY = "TU_API_KEY_DE_WHALE_ALERTS"
+BOT_TOKEN = "TU_TOKEN_DE_TELEGRAM"
+CHANNEL_ID = "@TU_CANAL_O_GRUPO"  # o ID numérico del grupo
+ADMIN_IDS = [123456789]  # tu ID de Telegram para comandos privados
+
+# Lista simulada de alertas
+whale_alerts = [
+    {"nombre": "Whale1", "tipo": "compra_largo", "cantidad": 500000},
+    {"nombre": "Whale2", "tipo": "compra_corto", "cantidad": 300000},
+    {"nombre": "Whale3", "tipo": "venta", "cantidad": 200000},
+]
+
+# Mapeo de emojis
+emoji_map = {
+    "compra_largo": "⬆️",
+    "compra_corto": "⬇️",
+    "venta": "💸"
+}
 
 # ------------------------------
-# CONFIGURACIÓN DE LOGS
+# Logging
 # ------------------------------
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
 # ------------------------------
-# FUNCIONES DEL BOT
+# Handlers
 # ------------------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("¡Bot XRP Whales activo!")
+async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text.lower()
+    if "hola" in user_text:
+        await update.message.reply_text(
+            "¡Hola! 👋\nPara ver las ballenas activas escribe: ballenas"
+        )
 
-async def check_whales(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Función que consulta la API de Whale Alerts y envía alertas al canal.
-    """
-    url = f"https://api.whale-alert.io/v1/transactions?api_key={WHALE_ALERT_API_KEY}&currency=xrp&min_value=100000"
+async def show_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "🐋 Alertas de Ballenas XRP 🐋\n\n"
+    for alert in whale_alerts:
+        emoji = emoji_map.get(alert["tipo"], "")
+        text += f"{emoji} {alert['nombre']} - ${alert['cantidad']:,}\n"
+    await update.message.reply_text(text)
+
+# Comandos solo para admins
+async def add_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
     try:
-        response = requests.get(url)
-        data = response.json()
-        if "transactions" in data:
-            for tx in data["transactions"]:
-                msg = (
-                    f"💰 Whale Alert XRP:\n"
-                    f"De: {tx['from']['owner']}\n"
-                    f"Para: {tx['to']['owner']}\n"
-                    f"Monto: {tx['amount']} XRP\n"
-                    f"Hash: {tx['hash']}"
-                )
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=msg)
+        nombre, tipo, cantidad = context.args
+        cantidad = int(cantidad)
+        whale_alerts.append({"nombre": nombre, "tipo": tipo, "cantidad": cantidad})
+        await update.message.reply_text(f"✅ Alerta añadida: {nombre} {tipo} ${cantidad}")
     except Exception as e:
-        logger.error(f"Error al consultar Whale Alerts: {e}")
+        await update.message.reply_text("❌ Uso: /add nombre tipo cantidad")
+
+async def del_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    try:
+        nombre = context.args[0]
+        global whale_alerts
+        whale_alerts = [w for w in whale_alerts if w["nombre"] != nombre]
+        await update.message.reply_text(f"🗑️ Alerta eliminada: {nombre}")
+    except Exception as e:
+        await update.message.reply_text("❌ Uso: /dell nombre")
+
+async def limit_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    try:
+        limite = int(context.args[0])
+        global whale_alerts
+        whale_alerts = whale_alerts[:limite]
+        await update.message.reply_text(f"⚡ Limite de alertas establecido en {limite}")
+    except Exception as e:
+        await update.message.reply_text("❌ Uso: /limit numero")
 
 # ------------------------------
-# MAIN
+# Main
 # ------------------------------
 async def main():
-    # Crear aplicación del bot
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Forzar que todos los schedulers usen pytz
-    application.job_queue.scheduler.configure(timezone=pytz.UTC)
+    # Mensajes normales
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), welcome))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)^ballenas$"), show_whales))
 
-    # Comandos
-    application.add_handler(CommandHandler("start", start))
+    # Comandos admin
+    app.add_handler(CommandHandler("add", add_alert))
+    app.add_handler(CommandHandler("dell", del_alert))
+    app.add_handler(CommandHandler("limit", limit_alert))
 
-    # Job para revisar Whale Alerts cada 60 segundos
-    application.job_queue.run_repeating(check_whales, interval=60, first=0)
-
-    # Iniciar bot
-    logger.info("Starting XRP Whale Bot...")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.idle()
+    # Inicia bot
+    await app.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
