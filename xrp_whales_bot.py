@@ -1,82 +1,70 @@
+import os
 import asyncio
+import datetime
 import pytz
-import random
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
     CommandHandler,
     MessageHandler,
     filters,
-    JobQueue,
+    ContextTypes,
 )
 
-# -------------------------
-# CONFIGURACIÓN
-# -------------------------
-BOT_TOKEN = "TU_BOT_TOKEN_AQUI"
-CHAT_ID = "TU_CHAT_ID_AQUI"  # chat donde se enviarán las alertas
+# Configuración desde variables de entorno de Render
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = int(os.environ.get("CHAT_ID"))
 
-# -------------------------
-# FUNCIONES
-# -------------------------
-
-# Mensaje de bienvenida
+# ========================
+# Comandos del bot
+# ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 ¡Hola! Bienvenido al bot de XRP Whales.\n"
-        "Usa /help para ver los comandos disponibles."
-    )
+    await update.message.reply_text("👋 ¡Bienvenido al bot de XRP Whales!")
 
-# Comandos de ayuda
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Comandos disponibles:\n"
-        "/start - Mensaje de bienvenida\n"
-        "/help - Esta ayuda\n\n"
-        "También puedo mostrar alertas de ballenas 💸⬆️🟢⬇️🔴"
-    )
+    await update.message.reply_text("ℹ️ Usa /start para comenzar, y espera alertas de ballenas XRP.")
 
-# Detecta palabras en mensajes y responde
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-    reply = ""
-    if "ballenas" in text:
-        reply = "🐋 ¡Alerta de ballenas! Mantente atento 💸⬆️🟢⬇️🔴"
-    if reply:
-        await update.message.reply_text(reply)
+async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❓ No entiendo ese comando.")
 
-# Alertas automáticas de ballenas
-async def whale_alert(context: ContextTypes.DEFAULT_TYPE):
-    alerts = [
-        "Compra ⬆️🟢 detectada por una ballena",
-        "Venta ⬇️🔴 detectada por una ballena",
-        "Envío 💸 detectado por una ballena"
-    ]
-    alert = random.choice(alerts)
-    await context.bot.send_message(chat_id=CHAT_ID, text=alert)
+# ========================
+# Jobs programados
+# ========================
+async def daily_alert(context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(chat_id=CHAT_ID, text="💸 ¡Recordatorio diario de XRP Whales!")
 
-# -------------------------
-# FUNCIÓN PRINCIPAL
-# -------------------------
+# ========================
+# Función principal
+# ========================
 async def main():
-    # Crear JobQueue con timezone compatible con pytz
-    job_queue = JobQueue(timezone=pytz.UTC)
-    job_queue.start()
+    # Crear aplicación
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Crear aplicación del bot
-    app = ApplicationBuilder().token(BOT_TOKEN).job_queue(job_queue).build()
-
-    # Agregar handlers
+    # Handlers de comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    app.add_handler(MessageHandler(filters.COMMAND, unknown))
 
-    # Programar alertas cada 60 segundos (puedes ajustar)
-    job_queue.run_repeating(whale_alert, interval=60, first=10, chat_id=CHAT_ID)
+    # Obtener JobQueue de la app (no pasar timezone aquí)
+    job_queue = app.job_queue
 
-    # Iniciar el bot
-    await app.run_polling()
+    # Configurar zona horaria para jobs
+    tz = pytz.timezone("America/New_York")
 
+    # Agregar job diario a las 10:00 AM hora NY
+    job_queue.run_daily(
+        daily_alert,
+        time=datetime.time(hour=10, minute=0, tzinfo=tz)
+    )
+
+    # Iniciar bot
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await app.updater.idle()
+
+# ========================
+# Ejecutar bot
+# ========================
 if __name__ == "__main__":
     asyncio.run(main())
