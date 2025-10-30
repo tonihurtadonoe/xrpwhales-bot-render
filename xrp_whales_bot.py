@@ -1,125 +1,110 @@
 import os
 import asyncio
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes,
-    JobQueue
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, JobQueue
+import json
 
-# ---------- VARIABLES DE ENTORNO ----------
+# ======== VARIABLES DE ENTORNO ========
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
-if not BOT_TOKEN or not CHAT_ID:
-    raise ValueError("Faltan BOT_TOKEN o CHAT_ID en variables de entorno")
-CHAT_ID = int(CHAT_ID)
+CHAT_ID = int(os.environ.get("CHAT_ID"))
+OWNER_ID = int(os.environ.get("OWNER_ID"))  # Tu ID de Telegram
+MIN_TRANS = float(os.environ.get("MIN_TRANS", 1000))  # Límite mínimo por defecto
+EMOJI_BUY = os.environ.get("EMOJI_BUY", "🐋⬆️🟢")
+EMOJI_SELL = os.environ.get("EMOJI_SELL", "🐋⬇️🔴")
+EMOJI_SEND = os.environ.get("EMOJI_SEND", "🐋💸")
 
-# ---------- CONFIGURACIONES ----------
-MIN_TRANSACTION = 100  # valor mínimo por defecto
-WALLETS = {}  # dict wallet: nombre
+WELCOME_ES = "🐋 ¡Hola! Bienvenido al bot de XRP Whales."
+WELCOME_EN = "🐋 Hi! Welcome to the XRP Whales bot."
 
-# ---------- FUNCIONES ADMIN ----------
-async def add_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != CHAT_ID:
-        await update.message.reply_text("❌ No tienes permiso para añadir ballenas.")
-        return
-    try:
-        wallet, name = context.args[0], context.args[1]
-    except IndexError:
-        await update.message.reply_text("⚠️ Usa: /add WALLET NOMBRE")
-        return
-    if wallet not in WALLETS:
-        WALLETS[wallet] = name
-        await update.message.reply_text(f"✅ Wallet añadida: {wallet} ({name})")
+WHALES_FILE = "whales.json"
+
+# ======== FUNCIONES AUXILIARES ========
+def load_whales():
+    if not os.path.exists(WHALES_FILE):
+        return {}
+    with open(WHALES_FILE, "r") as f:
+        return json.load(f)
+
+def save_whales(whales):
+    with open(WHALES_FILE, "w") as f:
+        json.dump(whales, f, indent=4)
+
+whales = load_whales()
+
+# ======== COMANDOS ========
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_lang = update.effective_user.language_code
+    if user_lang and user_lang.startswith("es"):
+        await update.message.reply_text(WELCOME_ES)
     else:
-        await update.message.reply_text("⚠️ Wallet ya estaba añadida.")
+        await update.message.reply_text(WELCOME_EN)
 
-async def del_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != CHAT_ID:
-        await update.message.reply_text("❌ No tienes permiso para borrar ballenas.")
+async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not whales:
+        await update.message.reply_text("No hay ballenas registradas 🐋.")
         return
-    try:
-        wallet = context.args[0]
-    except IndexError:
-        await update.message.reply_text("⚠️ Usa: /dell WALLET")
+    text = "🐋 Lista de ballenas:\n"
+    for name, addr in whales.items():
+        text += f"{name}: {addr}\n"
+    await update.message.reply_text(text)
+
+async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("No tienes permisos para añadir ballenas 🐋.")
         return
-    if wallet in WALLETS:
-        name = WALLETS.pop(wallet)
-        await update.message.reply_text(f"🗑️ Wallet borrada: {wallet} ({name})")
+    if len(context.args) < 2:
+        await update.message.reply_text("Uso: /addwhale <nombre> <direccion>")
+        return
+    name, address = context.args[0], context.args[1]
+    whales[name] = address
+    save_whales(whales)
+    await update.message.reply_text(f"Ballena añadida: {name} 🐋")
+
+async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("No tienes permisos para borrar ballenas 🐋.")
+        return
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /delwhale <nombre>")
+        return
+    name = context.args[0]
+    if name in whales:
+        del whales[name]
+        save_whales(whales)
+        await update.message.reply_text(f"Ballena eliminada: {name} 🐋")
     else:
-        await update.message.reply_text("⚠️ Wallet no encontrada.")
+        await update.message.reply_text(f"No existe la ballena: {name} 🐋")
 
 async def set_min(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global MIN_TRANSACTION
-    if update.effective_user.id != CHAT_ID:
-        await update.message.reply_text("❌ No tienes permiso para cambiar el límite.")
+    global MIN_TRANS
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("No tienes permisos para cambiar el límite 🐋.")
+        return
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /setmin <cantidad>")
         return
     try:
-        value = float(context.args[0])
-        MIN_TRANSACTION = value
-        await update.message.reply_text(f"✅ Límite mínimo actualizado a {MIN_TRANSACTION}")
-    except (IndexError, ValueError):
-        await update.message.reply_text("⚠️ Debes escribir un número válido.")
+        MIN_TRANS = float(context.args[0])
+        await update.message.reply_text(f"Límite mínimo actualizado a {MIN_TRANS} 🐋")
+    except ValueError:
+        await update.message.reply_text("Cantidad inválida 🐋.")
 
-# ---------- FUNCIONES NORMALES ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = update.effective_user.language_code
-    greeting = "Hola" if lang.startswith("es") else "Hi"
-    await update.message.reply_text(f"{greeting} 🐋! Soy tu bot de alertas XRP. Usa /ballenas para ver todas las ballenas vigiladas.")
+# ======== EJEMPLO DE MENSAJES DE TRADING ========
+async def trade_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Esto es solo un ejemplo: normalmente vendría de la lógica de monitorización
+    await update.message.reply_text(f"{EMOJI_BUY} Nueva compra detectada!\n{EMOJI_SELL} Nueva venta detectada!\n{EMOJI_SEND} Envío a otro wallet!")
 
-async def show_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not WALLETS:
-        await update.message.reply_text("No hay ballenas añadidas.")
-        return
-    msg = "🐋 Lista de ballenas vigiladas:\n"
-    for w, n in WALLETS.items():
-        msg += f"- {w} ({n})\n"
-    await update.message.reply_text(msg)
-
-# ---------- ALERTAS ----------
-async def alert_buy(wallet, amount, context: ContextTypes.DEFAULT_TYPE):
-    if amount >= MIN_TRANSACTION:
-        await context.bot.send_message(
-            CHAT_ID, f"⬆️🟢 Compra detectada!\nWallet: {wallet} ({WALLETS.get(wallet,'')})\nMonto: {amount}"
-        )
-
-async def alert_sell(wallet, amount, context: ContextTypes.DEFAULT_TYPE):
-    if amount >= MIN_TRANSACTION:
-        await context.bot.send_message(
-            CHAT_ID, f"⬇️🔴 Venta detectada!\nWallet: {wallet} ({WALLETS.get(wallet,'')})\nMonto: {amount}"
-        )
-
-async def alert_transfer(wallet, amount, context: ContextTypes.DEFAULT_TYPE):
-    if amount >= MIN_TRANSACTION:
-        await context.bot.send_message(
-            CHAT_ID, f"💸 Transferencia detectada!\nWallet: {wallet} ({WALLETS.get(wallet,'')})\nMonto: {amount}"
-        )
-
-# ---------- JOB EJEMPLO (MONITOREO XRP) ----------
-async def check_wallets(context: ContextTypes.DEFAULT_TYPE):
-    # Aquí va tu lógica real de monitor XRP
-    for wallet in WALLETS:
-        # Simulación de alertas
-        await alert_buy(wallet, 150, context)
-        await alert_sell(wallet, 200, context)
-        await alert_transfer(wallet, 120, context)
-
-# ---------- MAIN ----------
+# ======== MAIN ========
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Comandos de administración (solo tú)
-    app.add_handler(CommandHandler("add", add_wallet))
-    app.add_handler(CommandHandler("dell", del_wallet))
-    app.add_handler(CommandHandler("min", set_min))
-
-    # Comandos normales
+    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ballenas", show_wallets))
-
-    # JobQueue sin timezone
-    job_queue: JobQueue = app.job_queue
-    job_queue.run_repeating(check_wallets, interval=60, first=5)
-
+    app.add_handler(CommandHandler("ballenas", list_whales))
+    app.add_handler(CommandHandler("addwhale", add_whale))
+    app.add_handler(CommandHandler("delwhale", del_whale))
+    app.add_handler(CommandHandler("setmin", set_min))
+    app.add_handler(CommandHandler("trade", trade_notification))
+    
     await app.run_polling()
 
 if __name__ == "__main__":
