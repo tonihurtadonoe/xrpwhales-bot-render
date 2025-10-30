@@ -20,19 +20,21 @@ logging.basicConfig(
     handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
 )
 
-TOKEN = os.environ.get("TOKEN")
-USER_ID = os.environ.get("CHAT_ID")  # tu chat id
-WHALES_FILE = "whales.json"
-CONFIG_FILE = "config.json"
+# Leer variables de entorno correctas
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+USER_ID = os.environ.get("TELEGRAM_CHAT_ID")  # tu chat id
 
 if not TOKEN:
-    logging.error("❌ TOKEN no encontrado en variables de entorno. Abortando.")
+    logging.error("❌ TELEGRAM_TOKEN no encontrado en variables de entorno. Abortando.")
     raise SystemExit(1)
 
 try:
     USER_ID = int(USER_ID)
 except Exception:
-    logging.warning("⚠️ CHAT_ID no es numérico. Se mantendrá como string.")
+    logging.warning("⚠️ TELEGRAM_CHAT_ID no es numérico. Se mantendrá como string.")
+
+WHALES_FILE = "whales.json"
+CONFIG_FILE = "config.json"
 
 # ===== DEFAULTS =====
 DEFAULT_USD_THRESHOLD = 5_000_000.0
@@ -199,6 +201,11 @@ def start_websocket():
             time.sleep(5)
 
 # ===== TELEGRAM + FLASK =====
+# Validación simple del token
+if len(TOKEN.split(":")) != 3:
+    logging.error("❌ TELEGRAM_TOKEN inválido. Verifica que sea el token correcto.")
+    raise SystemExit(1)
+
 updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
 dp.add_handler(CommandHandler("start", start))
@@ -226,5 +233,3 @@ if __name__ == "__main__":
     logging.info("Bot iniciado con límite: $%s", USD_THRESHOLD)
     updater.start_polling()
     updater.idle()
-
-
