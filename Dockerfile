@@ -1,4 +1,4 @@
-# Dockerfile optimizado para xrpwhales-bot (async + websockets)
+# Dockerfile final para xrpwhales-bot (async + websockets + Flask)
 FROM python:3.11-slim
 
 # Directorio de trabajo dentro del contenedor
@@ -12,13 +12,15 @@ RUN pip install --upgrade pip \
 # Copiamos todos los archivos del proyecto
 COPY . .
 
-# Variables de entorno para Telegram (configuradas desde Render)
-# Ejemplo local:
+# Variables de entorno para Telegram (Render las definirá automáticamente)
 # ENV TELEGRAM_TOKEN=<tu_token_local>
 # ENV TELEGRAM_CHAT_ID=<tu_chat_id_local>
 
 # Puerto para Flask (Render define el puerto vía ENV PORT)
 ENV PORT=10000
+
+# Exponemos el puerto para Render
+EXPOSE 10000
 
 # Comando para iniciar el bot
 CMD ["python", "xrp_whales_bot.py"]
