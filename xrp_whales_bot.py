@@ -10,17 +10,9 @@ import websocket
 import os
 import time
 import logging
-from telegram import Update, ParseMode
-from telegram.ext import Updater, CommandHandler, CallbackContext
-
-import os
-from telegram import Bot
-
-TOKEN = os.environ.get("TOKEN")  # O pon directamente tu token aquí
-bot = Bot(token=TOKEN)
-print("Nombre del bot:", bot.get_me().username)
-
-
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ===== CONFIG =====
 logging.basicConfig(
@@ -77,9 +69,9 @@ def authorized(update: Update):
         return False
     return True
 
-def send_alert(message: str):
+async def send_alert(message: str):
     try:
-        updater.bot.send_message(
+        await application.bot.send_message(
             chat_id=USER_ID,
             text=message,
             parse_mode=ParseMode.MARKDOWN,
@@ -89,8 +81,8 @@ def send_alert(message: str):
         logging.error(f"Error enviando mensaje: {e}")
 
 # ===== BOT COMMANDS =====
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "👋 Bienvenido al bot XRP Whales.\n\n"
         "Comandos:\n"
         "/add <wallet> <nombre>\n"
@@ -100,53 +92,53 @@ def start(update: Update, context: CallbackContext):
         f"⚙️ Límite actual: ${USD_THRESHOLD:,.0f}"
     )
 
-def add_whale(update: Update, context: CallbackContext):
+async def add_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update):
         return
     if len(context.args) < 2:
-        update.message.reply_text("Uso: /add <wallet> <nombre>")
+        await update.message.reply_text("Uso: /add <wallet> <nombre>")
         return
     whales = load_whales()
     address, name = context.args[0], " ".join(context.args[1:])
     if any(w["address"] == address for w in whales):
-        update.message.reply_text("⚠️ Esa wallet ya está registrada.")
+        await update.message.reply_text("⚠️ Esa wallet ya está registrada.")
         return
     whales.append({"address": address, "name": name})
     save_whales(whales)
-    update.message.reply_text(f"✅ Añadido {name} ({address})")
+    await update.message.reply_text(f"✅ Añadido {name} ({address})")
 
-def del_whale(update: Update, context: CallbackContext):
+async def del_whale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorized(update):
         return
     if not context.args:
-        update.message.reply_text("Uso: /del <wallet>")
+        await update.message.reply_text("Uso: /del <wallet>")
         return
     address = context.args[0]
     whales = [w for w in load_whales() if w["address"] != address]
     save_whales(whales)
-    update.message.reply_text(f"🗑️ Eliminada la wallet {address}")
+    await update.message.reply_text(f"🗑️ Eliminada la wallet {address}")
 
-def list_whales(update: Update, context: CallbackContext):
+async def list_whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
     whales = load_whales()
     if not whales:
-        update.message.reply_text("No hay ballenas registradas.")
+        await update.message.reply_text("No hay ballenas registradas.")
     else:
         msg = "\n".join([f"• {w['name']}: `{w['address']}`" for w in whales])
-        update.message.reply_text(f"🐋 Ballenas monitoreadas:\n{msg}", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"🐋 Ballenas monitoreadas:\n{msg}", parse_mode=ParseMode.MARKDOWN)
 
-def set_limit(update: Update, context: CallbackContext):
+async def set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global USD_THRESHOLD
     if not authorized(update):
         return
     if not context.args:
-        update.message.reply_text(f"Límite actual: ${USD_THRESHOLD:,.0f}\nUso: /setlimit <USD>")
+        await update.message.reply_text(f"Límite actual: ${USD_THRESHOLD:,.0f}\nUso: /setlimit <USD>")
         return
     try:
         USD_THRESHOLD = float(context.args[0])
         save_config()
-        update.message.reply_text(f"✅ Nuevo límite: ${USD_THRESHOLD:,.0f}")
+        await update.message.reply_text(f"✅ Nuevo límite: ${USD_THRESHOLD:,.0f}")
     except ValueError:
-        update.message.reply_text("❌ Valor inválido.")
+        await update.message.reply_text("❌ Valor inválido.")
 
 # ===== XRP API =====
 def get_xrp_price_usd():
@@ -196,7 +188,8 @@ def on_message(ws, msg):
                 f"{direction}\n"
                 f"🔗 [Ver en XRPScan](https://xrpscan.com/tx/{tx_hash})"
             )
-            send_alert(msg)
+            import asyncio
+            asyncio.run(send_alert(msg))
 
 def start_websocket():
     while True:
@@ -213,13 +206,12 @@ def start_websocket():
             time.sleep(5)
 
 # ===== TELEGRAM + FLASK =====
-updater = Updater(TOKEN, use_context=True)
-dp = updater.dispatcher
-dp.add_handler(CommandHandler("start", start))
-dp.add_handler(CommandHandler("add", add_whale))
-dp.add_handler(CommandHandler("del", del_whale))
-dp.add_handler(CommandHandler("list", list_whales))
-dp.add_handler(CommandHandler("setlimit", set_limit))
+application = ApplicationBuilder().token(TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("add", add_whale))
+application.add_handler(CommandHandler("del", del_whale))
+application.add_handler(CommandHandler("list", list_whales))
+application.add_handler(CommandHandler("setlimit", set_limit))
 
 threading.Thread(target=start_websocket, daemon=True).start()
 
@@ -238,8 +230,4 @@ except Exception:
 
 if __name__ == "__main__":
     logging.info("Bot iniciado con límite: $%s", USD_THRESHOLD)
-    updater.start_polling()
-    updater.idle()
-
-
-
+    application.run_polling()
