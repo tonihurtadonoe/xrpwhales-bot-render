@@ -20,8 +20,8 @@ logging.basicConfig(
     handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
 )
 
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-USER_ID = os.environ.get("TELEGRAM_CHAT_ID")  # tu chat id
+TOKEN = os.environ.get("TOKEN")
+USER_ID = os.environ.get("CHAT_ID")  # tu chat id
 WHALES_FILE = "whales.json"
 CONFIG_FILE = "config.json"
 
@@ -226,3 +226,4 @@ if __name__ == "__main__":
     logging.info("Bot iniciado con límite: $%s", USD_THRESHOLD)
     updater.start_polling()
     updater.idle()
+
