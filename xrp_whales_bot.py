@@ -26,13 +26,13 @@ WHALES_FILE = "whales.json"
 CONFIG_FILE = "config.json"
 
 if not TOKEN:
-    logging.error("❌ TELEGRAM_TOKEN no encontrado en variables de entorno. Abortando.")
+    logging.error("❌ TOKEN no encontrado en variables de entorno. Abortando.")
     raise SystemExit(1)
 
 try:
     USER_ID = int(USER_ID)
 except Exception:
-    logging.warning("⚠️ TELEGRAM_CHAT_ID no es numérico. Se mantendrá como string.")
+    logging.warning("⚠️ CHAT_ID no es numérico. Se mantendrá como string.")
 
 # ===== DEFAULTS =====
 DEFAULT_USD_THRESHOLD = 5_000_000.0
@@ -226,4 +226,5 @@ if __name__ == "__main__":
     logging.info("Bot iniciado con límite: $%s", USD_THRESHOLD)
     updater.start_polling()
     updater.idle()
+
 
